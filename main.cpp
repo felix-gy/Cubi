@@ -1,9 +1,9 @@
 // ----------------------------------------------------------------------------
-// ESQUELETO DE CUBO DE RUBIK EN UN SOLO ARCHIVO
+// ESQUELETO DE CUBO DE RUBIK EN UN SOLO ARCHIVO (CORREGIDO)
 // ----------------------------------------------------------------------------
 // Compilación (ejemplo):
-// g++ RubikSkeleton.cpp glad.c -o rubik -lglfw -lGL -lm -ldl
-// (Asegúrate de tener glad.c en la misma carpeta)
+// g++ RubikSkeleton_Fixed.cpp -o rubik -lglfw -lGL -lm -ldl
+// (¡Ya no necesitas glad.c! La implementación está incluida abajo)
 // ----------------------------------------------------------------------------
 
 // --- 1. INCLUDES ---
@@ -12,7 +12,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 // --------------
-#include "linmath.h"
+// #include "linmath.h" // ¡ERROR! Se elimina porque provees tu propia librería abajo
 #include <iostream>
 #include <string>
 #include <vector>
@@ -22,6 +22,11 @@
 #include <fstream>
 #include <cmath>        // Para sinf, cosf, tan, sqrt
 #include <cstddef>      // Para offsetof
+
+// Definición de M_PI por si math.h no la incluye
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // --- 2. CONFIGURACIÓN ---
 const unsigned int SCR_WIDTH = 800;
@@ -343,7 +348,7 @@ public:
     void rotateZ(bool clockwise) {
         Color oldUp = m_faces[Face::UP], oldL = m_faces[Face::LEFT], oldD = m_faces[Face::DOWN], oldR = m_faces[Face::RIGHT];
         if (clockwise) { m_faces[Face::UP]=oldL; m_faces[Face::LEFT]=oldD; m_faces[Face::DOWN]=oldR; m_faces[Face::RIGHT]=oldUp; }
-        else { m_faces[Face::UP]=oldR; m_faces[Face::RIGHT]=oldD; m_faces[Face::DOWN]=oldL; m_faces[Face::LEFT]=oldUp; }
+        else { m_faces[Face::UP]=oldR; m_faces[Face::RIGHT]=oldD; m_faces[Face::DOWN]=oldL; m_faces[FaceE::LEFT]=oldUp; }
     }
     void rotateY(bool clockwise) {
         Color oldF = m_faces[Face::FRONT], oldR = m_faces[Face::RIGHT], oldB = m_faces[Face::BACK], oldL = m_faces[Face::LEFT];
@@ -491,7 +496,7 @@ public:
 private:
     std::array<Cubie, 27> m_cubies;
     GLuint m_VAO, m_VBO;
-    const float m_spacing = 1.05f;
+    const float m_spacing = 1.05f; // Este espaciado crea el "contorno"
 
     int getIndex(int x, int y, int z) const { return x + y * 3 + z * 9; }
 
@@ -574,6 +579,7 @@ int main() {
     glfwMakeContextCurrent(window);
     glfwSetKeyCallback(window, key_callback);
 
+    // Usar la función de carga de GLAD 2.0
     if (!gladLoadGL(glfwGetProcAddress)) {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
