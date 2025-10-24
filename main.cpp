@@ -212,43 +212,41 @@ static inline Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up)
 
 // Vertex Shader: Mínimo. Solo pasa la posición y el ID de la cara.
 const char* vertexShaderSource = R"glsl(
-    #version 330 core
-    layout (location = 0) in vec3 aPos;
-    layout (location = 2) in int aFaceID;
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 2) in float aFaceID;
 
-    out flat int v_FaceID; // 'flat' = no interpolar
+out float v_FaceID;
 
-    uniform mat4 model;
-    uniform mat4 view;
-    uniform mat4 projection;
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
 
-    void main() {
-        gl_Position = projection * view * model * vec4(aPos, 1.0);
-        v_FaceID = aFaceID;
-    }
+void main() {
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+    v_FaceID = aFaceID;
+}
 )glsl";
 
 // Fragment Shader: Mínimo. Solo colorea basado en el FaceID.
 const char* fragmentShaderSource = R"glsl(
-    #version 330 core
-    out vec4 FragColor;
+#version 330 core
+out vec4 FragColor;
 
-    in flat int v_FaceID;
+in float v_FaceID;
 
-    uniform vec3 u_faceColors[6]; // [R, L, U, D, F, B]
+uniform vec3 u_faceColors[6];
 
-    void main() {
-        // Seleccionar el color de la cara
-        vec3 objectColor = u_faceColors[v_FaceID];
+void main() {
+    int faceIndex = int(v_FaceID);
+    vec3 objectColor = u_faceColors[faceIndex];
 
-        // Si es negro (cara interna), descartar
-        if (objectColor == vec3(0.0, 0.0, 0.0)) {
-            discard;
-        }
-        
-        // Sin iluminación, solo color
-        FragColor = vec4(objectColor, 1.0);
+    if (objectColor == vec3(0.0, 0.0, 0.0)) {
+        discard;
     }
+
+    FragColor = vec4(objectColor, 1.0);
+}
 )glsl";
 
 
