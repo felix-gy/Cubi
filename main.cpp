@@ -348,7 +348,7 @@ public:
     void rotateZ(bool clockwise) {
         Color oldUp = m_faces[Face::UP], oldL = m_faces[Face::LEFT], oldD = m_faces[Face::DOWN], oldR = m_faces[Face::RIGHT];
         if (clockwise) { m_faces[Face::UP]=oldL; m_faces[Face::LEFT]=oldD; m_faces[Face::DOWN]=oldR; m_faces[Face::RIGHT]=oldUp; }
-        else { m_faces[Face::UP]=oldR; m_faces[Face::RIGHT]=oldD; m_faces[Face::DOWN]=oldL; m_faces[FaceE::LEFT]=oldUp; }
+        else { m_faces[Face::UP]=oldR; m_faces[Face::RIGHT]=oldD; m_faces[Face::DOWN]=oldL; m_faces[Face::LEFT]=oldUp; }
     }
     void rotateY(bool clockwise) {
         Color oldF = m_faces[Face::FRONT], oldR = m_faces[Face::RIGHT], oldB = m_faces[Face::BACK], oldL = m_faces[Face::LEFT];
