@@ -1,104 +1,33 @@
+// ----------------------------------------------------------------------------
+// ESQUELETO DE CUBO DE RUBIK EN UN SOLO ARCHIVO
+// ----------------------------------------------------------------------------
+// Compilación (ejemplo):
+// g++ RubikSkeleton.cpp glad.c -o rubik -lglfw -lGL -lm -ldl
+// (Asegúrate de tener glad.c en la misma carpeta)
+// ----------------------------------------------------------------------------
+
+// --- 1. INCLUDES ---
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+// --------------
 #include "linmath.h"
-
-#include <stdlib.h>
-#include <stddef.h>
-#include <stdio.h>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <filesystem>
-#include <cmath>
-#include <glm/glm.hpp>
+#include <map>
+#include <array>
+#include <sstream>
+#include <fstream>
+#include <cmath>        // Para sinf, cosf, tan, sqrt
+#include <cstddef>      // Para offsetof
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-
-
-void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-void processInput(GLFWwindow *window);
-
-// settings
+// --- 2. CONFIGURACIÓN ---
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
 
-// multiplicar vector por matriz
-void transformVertex(float out[3], const float M[16], const float v[3]) {
-    float x = v[0], y = v[1], z = v[2];
-    out[0] = M[0]*x + M[4]*y + M[8]*z + M[12];
-    out[1] = M[1]*x + M[5]*y + M[9]*z + M[13];
-    out[2] = M[2]*x + M[6]*y + M[10]*z + M[14];
-}
-const char *vertexShaderSource = R"(
-	#version 330 core
-	layout (location = 0) in vec3 aPos;    // Posición del vértice (de -0.5 a 0.5)
-	layout (location = 1) in vec3 aNormal; // Normal del vértice
-	layout (location = 2) in int aFaceID; // ID de la cara (0 a 5)
-
-	// Salidas para el Fragment Shader
-	out vec3 v_FragPos;
-	out vec3 v_Normal;
-	flat out int v_FaceID; // 'flat' significa que no se interpola
-
-	// Matrices de transformación
-	uniform mat4 model;
-	uniform mat4 view;
-	uniform mat4 projection;
-
-	void main() {
-		v_FragPos = vec3(model * vec4(aPos, 1.0));
-		v_Normal = mat3(transpose(inverse(model))) * aNormal;
-		v_FaceID = aFaceID;
-		
-		gl_Position = projection * view * model * vec4(aPos, 1.0);
-	}
-	)";
-	
-	
-	
-const char *fragmentShaderSource = R"(
-	#version 330 core
-	out vec4 FragColor;
-
-	// Entradas del Vertex Shader
-	in vec3 v_FragPos;
-	in vec3 v_Normal;
-	flat in int v_FaceID;
-
-	// ¡EL TRUCO! Un array de 6 colores, uno para cada cara
-	// Lo actualizaremos para CADA cubie que dibujemos.
-	uniform vec3 u_faceColors[6]; // [0]=+X, [1]=-X, [2]=+Y, [3]=-Y, [4]=+Z, [5]=-Z
-
-	// (Para iluminación simple)
-	uniform vec3 u_lightPos;
-	uniform vec3 u_viewPos;
-
-	void main() {
-		// 1. Seleccionar el color de la cara
-		vec3 objectColor = u_faceColors[v_FaceID];
-
-		// 2. Si es negro (cara interna), no lo dibujes
-		if (objectColor == vec3(0.0, 0.0, 0.0)) {
-			discard;
-		}
-
-		// 3. Iluminación (Phong Básico)
-		float ambientStrength = 0.2;
-		vec3 ambient = ambientStrength * vec3(1.0);
-
-		vec3 norm = normalize(v_Normal);
-		vec3 lightDir = normalize(u_lightPos - v_FragPos);
-		float diff = max(dot(norm, lightDir), 0.0);
-		vec3 diffuse = diff * vec3(1.0); // Luz blanca
-
-		vec3 result = (ambient + diffuse) * objectColor;
-		FragColor = vec4(result, 1.0);
-	}
-	)";
-
+// --- 3. LIBRERÍA MATEMÁTICA (PROPORCIONADA POR EL USUARIO) ---
 
 //-------------------------------------libreria-----------------------------------------
 
@@ -199,23 +128,23 @@ struct Mat4
     // Column-major 4x4 (OpenGL style): m[c*4 + r]
     float m[16];
     Mat4()
-	{ 
-		for(int i=0;i<16;++i)
-		{
-			m[i]=0;
-		}			
-	}
-	static Mat4 identity()
-	{
+    { 
+        for(int i=0;i<16;++i)
+        {
+            m[i]=0;
+        }           
+    }
+    static Mat4 identity()
+    {
         Mat4 I; 
-		I.m[0]=I.m[5]=I.m[10]=I.m[15]=1.0f; 
-		return I;
+        I.m[0]=I.m[5]=I.m[10]=I.m[15]=1.0f; 
+        return I;
     }
 };
 
 static inline float dot(const Vec3&a,const Vec3&b)
 { 
-	return ((a.x*b.x) + (a.y*b.y) + (a.z*b.z)); 
+    return ((a.x*b.x) + (a.y*b.y) + (a.z*b.z)); 
 }
 
 static inline Vec3  cross(const Vec3&a,const Vec3&b)
@@ -225,13 +154,13 @@ static inline Vec3  cross(const Vec3&a,const Vec3&b)
 
 static inline float length(const Vec3&v)
 { 
-	return (std::sqrt(dot(v,v))); 
+    return (std::sqrt(dot(v,v))); 
 }
 
 static inline Vec3  normalize(const Vec3&v)
 { 
-	float L = length(v); 
-	return ((L>0) ? (v*(1.0f/L)) : v); 
+    float L = length(v); 
+    return ((L>0) ? (v*(1.0f/L)) : v); 
 }
 
 static inline Mat4 perspective(float fovy_deg, float aspect, float znear, float zfar)
@@ -239,8 +168,8 @@ static inline Mat4 perspective(float fovy_deg, float aspect, float znear, float 
     float f = 1.0f / std::tan(fovy_deg*(float)M_PI/180.0f/2.0f);
     Mat4 P;
     P.m[0]=f/aspect; 
-	P.m[5]=f; 
-	P.m[10]=(zfar+znear)/(znear-zfar); P.m[11]=-1.0f;
+    P.m[5]=f; 
+    P.m[10]=(zfar+znear)/(znear-zfar); P.m[11]=-1.0f;
     P.m[14]=(2.0f*zfar*znear)/(znear-zfar);
     return P;
 }
@@ -258,10 +187,13 @@ static inline Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up)
     M[2] = -f.x; M[6] = -f.y; M[10] = -f.z;
 
     float T[16];
-    translate(T, -eye.x, -eye.y, -eye.z);
+    // La función 'translate' de la librería crea una matriz de traslación
+    // pero para 'lookAt' necesitamos aplicar una traslación *inversa*.
+    // Usamos 'inverseTranslate'
+    inverseTranslate(T, eye.x, eye.y, eye.z);
 
     float R[16];
-    multiply(R, M, T);
+    multiply(R, M, T); // Aplicar T primero, luego M
 
     // Convertir a Mat4 antes de retornar
     Mat4 result;
@@ -271,422 +203,426 @@ static inline Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up)
     return result;
 }
 
-static inline Mat4 ortho(float left, float right, float bottom, float top, float znear, float zfar)
-{
-    Mat4 M;
-    for (int i = 0; i < 16; ++i) M.m[i] = 0.0f;
-    M.m[0] = 2.0f / (right - left);
-    M.m[5] = 2.0f / (top - bottom);
-    M.m[10] = -2.0f / (zfar - znear);
-    M.m[12] = -(right + left) / (right - left);
-    M.m[13] = -(top + bottom) / (top - bottom);
-    M.m[14] = -(zfar + znear) / (zfar - znear);
-    M.m[15] = 1.0f;
-    return M;
-}
+// --- 4. SHADERS (INTERNOS) ---
+
+// Vertex Shader: Mínimo. Solo pasa la posición y el ID de la cara.
+const char* vertexShaderSource = R"glsl(
+    #version 330 core
+    layout (location = 0) in vec3 aPos;
+    layout (location = 2) in int aFaceID;
+
+    out flat int v_FaceID; // 'flat' = no interpolar
+
+    uniform mat4 model;
+    uniform mat4 view;
+    uniform mat4 projection;
+
+    void main() {
+        gl_Position = projection * view * model * vec4(aPos, 1.0);
+        v_FaceID = aFaceID;
+    }
+)glsl";
+
+// Fragment Shader: Mínimo. Solo colorea basado en el FaceID.
+const char* fragmentShaderSource = R"glsl(
+    #version 330 core
+    out vec4 FragColor;
+
+    in flat int v_FaceID;
+
+    uniform vec3 u_faceColors[6]; // [R, L, U, D, F, B]
+
+    void main() {
+        // Seleccionar el color de la cara
+        vec3 objectColor = u_faceColors[v_FaceID];
+
+        // Si es negro (cara interna), descartar
+        if (objectColor == vec3(0.0, 0.0, 0.0)) {
+            discard;
+        }
+        
+        // Sin iluminación, solo color
+        FragColor = vec4(objectColor, 1.0);
+    }
+)glsl";
 
 
-//-----------------------------------------cubo-----------------------------------------
-class Cubie {
+// --- 5. CLASE SHADER (SIMPLIFICADA) ---
+class Shader {
 public:
-    // Matriz de transformación que representa la posición y rotación
-    // actual de este cubie en el mundo.
-    glm::mat4 modelMatrix;
+    unsigned int ID;
 
-    // Posición lógica en la cuadrícula 3x3x3 (usando -1, 0, 1).
-    // Esto es inmutable después de la creación y se usa para
-    // identificar qué cubies pertenecen a una cara.
-    const glm::ivec3 logicalPosition;
-
-    // Colores de las 6 caras (p.ej., +X, -X, +Y, -Y, +Z, -Z)
-    // Puedes usar un enum para los índices.
-    glm::vec3 faceColors[6];
-
-public:
-    Cubie(glm::ivec3 pos) : logicalPosition(pos) {
-        // La matriz de modelo inicial es solo una traslación
-        // a su posición lógica en la cuadrícula.
-        // (Multiplica por un 'espaciado' para que no estén pegados).
-        float spacing = 2.05f; // Un poco más de 2.0 para los huecos
-        this->modelMatrix = glm::translate(glm::mat4(1.0f), glm::vec3(pos) * spacing);
-
-        // ... aquí iría la lógica para asignar los colores
-        // correctos (rojo, azul, etc.) basado en la posición lógica.
-        // p.ej., si pos.z == 1 (cara frontal), faceColors[Z+] = ROJO
-        // si pos.z == -1 (cara trasera), faceColors[Z-] = NARANJA
-        // ...etc. Las caras internas se quedan en NEGRO.
+    // Constructor que toma el CÓDIGO FUENTE como strings
+    Shader(const char* vertexSource, const char* fragmentSource) {
+        // 2. Compilar shaders
+        unsigned int vertex, fragment;
+        
+        // Vertex Shader
+        vertex = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vertex, 1, &vertexSource, NULL);
+        glCompileShader(vertex);
+        checkCompileErrors(vertex, "VERTEX");
+        
+        // Fragment Shader
+        fragment = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fragment, 1, &fragmentSource, NULL);
+        glCompileShader(fragment);
+        checkCompileErrors(fragment, "FRAGMENT");
+        
+        // Programa de Shaders
+        ID = glCreateProgram();
+        glAttachShader(ID, vertex);
+        glAttachShader(ID, fragment);
+        glLinkProgram(ID);
+        checkCompileErrors(ID, "PROGRAM");
+        
+        glDeleteShader(vertex);
+        glDeleteShader(fragment);
     }
 
-    // El Cubie en sí no se dibuja. El 'RubiksCube' lo dibujará.
-};
+    void use() { 
+        glUseProgram(ID); 
+    }
 
+    // Adaptado para tomar el 'float[16]' de tu librería
+    void setMat4(const std::string &name, const float* mat) const {
+        glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, mat);
+    }
 
-class RubiksCube {
-public:
-    RubiksCube();
-    ~RubiksCube();
-
-    // Lógica (como antes)
-    void rotateFace(Face face, bool clockwise);
-
-    // --- ¡NUEVO! ---
-    // Métodos de OpenGL
-    void setupMesh(Shader& shader); // Configura el VAO/VBO del cubo
-    void draw(Shader& shader, const glm::mat4& view, const glm::mat4& projection);
+    // Adaptado para tomar tu 'Vec3' struct
+    void setVec3Array(const std::string &name, int count, const Vec3 *values) const {
+        glUniform3fv(glGetUniformLocation(ID, name.c_str()), count, (const GLfloat*)values);
+    }
 
 private:
-    std::array<Cubie, 27> m_cubies;
-    int getIndex(int x, int y, int z) const;
-    void rotateSliceZ(int slice, bool clockwise);
-    // (helpers para rotateSliceX y rotateSliceY)
-
-    // ¡NUEVO! IDs de OpenGL
-    GLuint m_VAO;
-    GLuint m_VBO;
-    
-    // Espaciado entre cubies
-    const float m_spacing = 1.05f; 
-
-    // Helper para convertir nuestro Color enum a un vec3 para el shader
-    glm::vec3 getVec3FromColor(Color color);
-};
-
-RubiksCube::~RubiksCube() {
-    glDeleteVertexArrays(1, &m_VAO);
-    glDeleteBuffers(1, &m_VBO);
-}
-
-// ¡NUEVO! Define los 36 vértices de UN cubo
-void RubiksCube::setupMesh(Shader& shader) {
-    // 3 floats para Pos, 3 para Normal, 1 para FaceID (usaremos float)
-    // 7 floats por vértice. 6 vértices por cara. 6 caras.
-    // 7 * 6 * 6 = 252 floats
-    
-    // Tamaño de un solo cubie (0.5 = medio cubo)
-    float s = 0.5f; 
-
-    // (Pos x, y, z), (Normal x, y, z), (FaceID)
-    std::vector<float> vertices = {
-        // Cara Derecha (+X, ID 0)
-        s,  s,  s,  1.0, 0.0, 0.0, 0.0,
-        s, -s,  s,  1.0, 0.0, 0.0, 0.0,
-        s, -s, -s,  1.0, 0.0, 0.0, 0.0,
-        s, -s, -s,  1.0, 0.0, 0.0, 0.0,
-        s,  s, -s,  1.0, 0.0, 0.0, 0.0,
-        s,  s,  s,  1.0, 0.0, 0.0, 0.0,
-
-        // Cara Izquierda (-X, ID 1)
-       -s,  s,  s, -1.0, 0.0, 0.0, 1.0,
-       -s, -s, -s, -1.0, 0.0, 0.0, 1.0,
-       -s, -s,  s, -1.0, 0.0, 0.0, 1.0,
-       -s, -s, -s, -1.0, 0.0, 0.0, 1.0,
-       -s,  s,  s, -1.0, 0.0, 0.0, 1.0,
-       -s,  s, -s, -1.0, 0.0, 0.0, 1.0,
-
-        // Cara Arriba (+Y, ID 2)
-       -s,  s, -s,  0.0, 1.0, 0.0, 2.0,
-        s,  s,  s,  0.0, 1.0, 0.0, 2.0,
-        s,  s, -s,  0.0, 1.0, 0.0, 2.0,
-        s,  s,  s,  0.0, 1.0, 0.0, 2.0,
-       -s,  s, -s,  0.0, 1.0, 0.0, 2.0,
-       -s,  s,  s,  0.0, 1.0, 0.0, 2.0,
-
-        // Cara Abajo (-Y, ID 3)
-       -s, -s, -s,  0.0, -1.0, 0.0, 3.0,
-        s, -s, -s,  0.0, -1.0, 0.0, 3.0,
-        s, -s,  s,  0.0, -1.0, 0.0, 3.0,
-        s, -s,  s,  0.0, -1.0, 0.0, 3.0,
-       -s, -s,  s,  0.0, -1.0, 0.0, 3.0,
-       -s, -s, -s,  0.0, -1.0, 0.0, 3.0,
-
-        // Cara Frontal (+Z, ID 4)
-       -s, -s,  s,  0.0, 0.0, 1.0, 4.0,
-        s, -s,  s,  0.0, 0.0, 1.0, 4.0,
-        s,  s,  s,  0.0, 0.0, 1.0, 4.0,
-        s,  s,  s,  0.0, 0.0, 1.0, 4.0,
-       -s,  s,  s,  0.0, 0.0, 1.0, 4.0,
-       -s, -s,  s,  0.0, 0.0, 1.0, 4.0,
-
-        // Cara Trasera (-Z, ID 5)
-       -s, -s, -s,  0.0, 0.0, -1.0, 5.0,
-       -s,  s, -s,  0.0, 0.0, -1.0, 5.0,
-        s,  s, -s,  0.0, 0.0, -1.0, 5.0,
-        s,  s, -s,  0.0, 0.0, -1.0, 5.0,
-        s, -s, -s,  0.0, 0.0, -1.0, 5.0,
-       -s, -s, -s,  0.0, 0.0, -1.0, 5.0
-    };
-
-    glGenVertexArrays(1, &m_VAO);
-    glGenBuffers(1, &m_VBO);
-
-    glBindVertexArray(m_VAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-
-    // Stride (paso) es 7 floats (3 pos + 3 normal + 1 id)
-    GLsizei stride = 7 * sizeof(float);
-
-    // layout (location = 0) in vec3 aPos;
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
-    glEnableVertexAttribArray(0);
-    
-    // layout (location = 1) in vec3 aNormal;
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    // layout (location = 2) in int aFaceID;
-    // ¡Importante! Usamos glVertexAttribIPointer (con 'I') porque es un entero
-    // Lo guardamos como float, pero lo leemos como int.
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
-    glEnableVertexAttribArray(2);
-    
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-}
-
-// ¡NUEVO! El bucle de dibujado
-void RubiksCube::draw(Shader& shader, const glm::mat4& view, const glm::mat4& projection) {
-    shader.use();
-    shader.setMat4("projection", projection);
-    shader.setMat4("view", view);
-
-    // (Uniforms de iluminación, puedes ponerlos una vez aquí)
-    shader.setVec3("u_lightPos", glm::vec3(5.0f, 10.0f, 5.0f));
-    shader.setVec3("u_viewPos", glm::vec3(0.0f, 0.0f, 10.0f)); // Asume que la cámara está en (0,0,10)
-
-    // Prepara el mesh (VAO) que vamos a dibujar 26 veces
-    glBindVertexArray(m_VAO);
-
-    // Array temporal para guardar los 6 colores del cubie
-    glm::vec3 faceColors[6];
-
-    // Bucle 3x3x3
-    for (int z = 0; z <= 2; z++) {
-        for (int y = 0; y <= 2; y++) {
-            for (int x = 0; x <= 2; x++) {
-                
-                // 1. Omitir el centro invisible
-                if (x == 1 && y == 1 && z == 1) continue;
-
-                // 2. Obtener el cubie en esta posición lógica
-                Cubie& cubie = m_cubies[getIndex(x, y, z)];
-
-                // 3. Calcular la matriz 'model' para este cubie
-                // Mapeamos (0,1,2) a (-1, 0, 1) para centrar el cubo
-                glm::vec3 position(
-                    (x - 1.0f) * m_spacing,
-                    (y - 1.0f) * m_spacing,
-                    (z - 1.0f) * m_spacing
-                );
-                glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
-                
-                // (¡Aquí es donde entraría la animación!)
-                // (Si este cubie está animando, multiplicaríamos 'model'
-                // por una matriz de rotación temporal)
-                
-                shader.setMat4("model", model);
-
-                // 4. Obtener sus 6 colores y enviarlos al shader
-                faceColors[0] = getVec3FromColor(cubie.getFaceColor(Face::RIGHT));
-                faceColors[1] = getVec3FromColor(cubie.getFaceColor(Face::LEFT));
-                faceColors[2] = getVec3FromColor(cubie.getFaceColor(Face::UP));
-                faceColors[3] = getVec3FromColor(cubie.getFaceColor(Face::DOWN));
-                faceColors[4] = getVec3FromColor(cubie.getFaceColor(Face::FRONT));
-                faceColors[5] = getVec3FromColor(cubie.getFaceColor(Face::BACK));
-
-                shader.setVec3Array("u_faceColors", 6, faceColors);
-
-                // 5. ¡Dibujar!
-                glDrawArrays(GL_TRIANGLES, 0, 36); // 36 vértices
+    void checkCompileErrors(unsigned int shader, std::string type) {
+        int success;
+        char infoLog[1024];
+        if (type != "PROGRAM") {
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+            if (!success) {
+                glGetShaderInfoLog(shader, 1024, NULL, infoLog);
+                std::cout << "ERROR::SHADER_COMPILATION_ERROR of type: " << type << "\n" << infoLog << std::endl;
+            }
+        }
+        else {
+            glGetProgramiv(shader, GL_LINK_STATUS, &success);
+            if (!success) {
+                glGetProgramInfoLog(shader, 1024, NULL, infoLog);
+                std::cout << "ERROR::PROGRAM_LINKING_ERROR of type: " << type << "\n" << infoLog << std::endl;
             }
         }
     }
+};
 
-    glBindVertexArray(0);
-}
 
-// Helper para convertir el enum en un vector RGB
-glm::vec3 RubiksCube::getVec3FromColor(Color color) {
-    switch (color) {
-        case Color::WHITE:  return glm::vec3(1.0f, 1.0f, 1.0f);
-        case Color::YELLOW: return glm::vec3(1.0f, 1.0f, 0.0f);
-        case Color::RED:    return glm::vec3(1.0f, 0.0f, 0.0f);
-        case Color::ORANGE: return glm::vec3(1.0f, 0.5f, 0.0f);
-        case Color::GREEN:  return glm::vec3(0.0f, 1.0f, 0.0f);
-        case Color::BLUE:   return glm::vec3(0.0f, 0.0f, 1.0f);
-        case Color::BLACK:
-        default:            return glm::vec3(0.0f, 0.0f, 0.0f);
+// --- 6. ENUMS Y CLASES DEL CUBO ---
+
+enum class Color { WHITE, YELLOW, RED, ORANGE, GREEN, BLUE, BLACK };
+enum class Face { UP, DOWN, LEFT, RIGHT, FRONT, BACK };
+using FaceColors = std::map<Face, Color>;
+
+//
+// CLASE CUBIE: Almacena el estado de color de 1 pieza
+//
+class Cubie {
+public:
+    Cubie() {
+        m_faces[Face::UP]    = Color::BLACK;
+        m_faces[Face::DOWN]  = Color::BLACK;
+        m_faces[Face::LEFT]  = Color::BLACK;
+        m_faces[Face::RIGHT] = Color::BLACK;
+        m_faces[Face::FRONT] = Color::BLACK;
+        m_faces[Face::BACK]  = Color::BLACK;
+    }
+
+    void setFaceColor(Face face, Color color) { m_faces[face] = color; }
+    Color getFaceColor(Face face) const { return m_faces.at(face); }
+
+    // Rota los colores internos
+    void rotateZ(bool clockwise) {
+        Color oldUp = m_faces[Face::UP], oldL = m_faces[Face::LEFT], oldD = m_faces[Face::DOWN], oldR = m_faces[Face::RIGHT];
+        if (clockwise) { m_faces[Face::UP]=oldL; m_faces[Face::LEFT]=oldD; m_faces[Face::DOWN]=oldR; m_faces[Face::RIGHT]=oldUp; }
+        else { m_faces[Face::UP]=oldR; m_faces[Face::RIGHT]=oldD; m_faces[Face::DOWN]=oldL; m_faces[Face::LEFT]=oldUp; }
+    }
+    void rotateY(bool clockwise) {
+        Color oldF = m_faces[Face::FRONT], oldR = m_faces[Face::RIGHT], oldB = m_faces[Face::BACK], oldL = m_faces[Face::LEFT];
+        if (clockwise) { m_faces[Face::FRONT]=oldR; m_faces[Face::RIGHT]=oldB; m_faces[Face::BACK]=oldL; m_faces[Face::LEFT]=oldF; }
+        else { m_faces[Face::FRONT]=oldL; m_faces[Face::LEFT]=oldB; m_faces[Face::BACK]=oldR; m_faces[Face::RIGHT]=oldF; }
+    }
+    void rotateX(bool clockwise) {
+        Color oldU = m_faces[Face::UP], oldB = m_faces[Face::BACK], oldD = m_faces[Face::DOWN], oldF = m_faces[Face::FRONT];
+        if (clockwise) { m_faces[Face::UP]=oldF; m_faces[Face::FRONT]=oldD; m_faces[Face::DOWN]=oldB; m_faces[Face::BACK]=oldU; }
+        else { m_faces[Face::UP]=oldB; m_faces[Face::BACK]=oldD; m_faces[Face::DOWN]=oldF; m_faces[Face::FRONT]=oldU; }
+    }
+
+private:
+    FaceColors m_faces;
+};
+
+//
+// CLASE RUBIKSCUBE: El "Manager" que controla los 26 cubies y el dibujado
+//
+class RubiksCube {
+public:
+    RubiksCube() {
+        // Asignar colores iniciales
+        for (int z = 0; z <= 2; z++) { for (int y = 0; y <= 2; y++) { for (int x = 0; x <= 2; x++) {
+            if (x == 1 && y == 1 && z == 1) continue; // Omitir centro
+            int i = getIndex(x, y, z);
+            if (z == 2) m_cubies[i].setFaceColor(Face::FRONT, Color::RED);
+            if (z == 0) m_cubies[i].setFaceColor(Face::BACK, Color::ORANGE);
+            if (y == 2) m_cubies[i].setFaceColor(Face::UP, Color::WHITE);
+            if (y == 0) m_cubies[i].setFaceColor(Face::DOWN, Color::YELLOW);
+            if (x == 0) m_cubies[i].setFaceColor(Face::LEFT, Color::GREEN);
+            if (x == 2) m_cubies[i].setFaceColor(Face::RIGHT, Color::BLUE);
+        }}}
+    }
+
+    ~RubiksCube() {
+        glDeleteVertexArrays(1, &m_VAO);
+        glDeleteBuffers(1, &m_VBO);
+    }
+
+    // Lógica pública para rotar
+    void rotateFace(Face face, bool clockwise) {
+        switch (face) {
+            case Face::FRONT: rotateSliceZ(2, clockwise); break;
+            case Face::BACK:  rotateSliceZ(0, !clockwise); break;
+            case Face::UP:    rotateSliceY(2, clockwise); break;
+            case Face::DOWN:  rotateSliceY(0, !clockwise); break;
+            case Face::RIGHT: rotateSliceX(2, clockwise); break;
+            case Face::LEFT:  rotateSliceX(0, !clockwise); break;
+        }
+    }
+
+    // Configura el mesh de UN solo cubo (sin normales)
+    void setupMesh() {
+        float s = 0.5f; // Mitad del tamaño
+
+        // Struct de Vértice simplificado: Posición + ID de Cara
+        struct Vertex {
+            Vec3 pos;   // Usamos tu struct Vec3
+            GLint faceID;
+        };
+
+        std::vector<Vertex> vertices = {
+            // Cara Derecha (+X, ID 0)
+            {{s, s, s}, 0}, {{s,-s, s}, 0}, {{s,-s,-s}, 0},
+            {{s,-s,-s}, 0}, {{s, s,-s}, 0}, {{s, s, s}, 0},
+            // Cara Izquierda (-X, ID 1)
+            {{-s, s, s}, 1}, {{-s,-s,-s}, 1}, {{-s,-s, s}, 1},
+            {{-s,-s,-s}, 1}, {{-s, s, s}, 1}, {{-s, s,-s}, 1},
+            // Cara Arriba (+Y, ID 2)
+            {{-s, s,-s}, 2}, {{s, s, s}, 2}, {{s, s,-s}, 2},
+            {{s, s, s}, 2}, {{-s, s,-s}, 2}, {{-s, s, s}, 2},
+            // Cara Abajo (-Y, ID 3)
+            {{-s,-s,-s}, 3}, {{s,-s,-s}, 3}, {{s,-s, s}, 3},
+            {{s,-s, s}, 3}, {{-s,-s, s}, 3}, {{-s,-s,-s}, 3},
+            // Cara Frontal (+Z, ID 4)
+            {{-s,-s, s}, 4}, {{s,-s, s}, 4}, {{s, s, s}, 4},
+            {{s, s, s}, 4}, {{-s, s, s}, 4}, {{-s,-s, s}, 4},
+            // Cara Trasera (-Z, ID 5)
+            {{-s,-s,-s}, 5}, {{-s, s,-s}, 5}, {{s, s,-s}, 5},
+            {{s, s,-s}, 5}, {{s,-s,-s}, 5}, {{-s,-s,-s}, 5}
+        };
+
+        glGenVertexArrays(1, &m_VAO);
+        glGenBuffers(1, &m_VBO);
+        glBindVertexArray(m_VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+
+        GLsizei stride = sizeof(Vertex);
+        
+        // layout (location = 0) in vec3 aPos;
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, pos));
+        glEnableVertexAttribArray(0);
+        
+        // layout (location = 2) in int aFaceID;
+        glVertexAttribIPointer(2, 1, GL_INT, stride, (void*)offsetof(Vertex, faceID));
+        glEnableVertexAttribArray(2);
+        
+        glBindVertexArray(0);
+    }
+
+    // Dibuja los 26 cubies
+    void draw(Shader& shader, const Mat4& view, const Mat4& projection) {
+        shader.use();
+        shader.setMat4("projection", projection.m);
+        shader.setMat4("view", view.m);
+
+        glBindVertexArray(m_VAO);
+
+        Vec3 faceColors[6]; // Usamos tu struct Vec3
+        float modelMatrix[16]; // Usamos un array C-style para tu librería
+
+        for (int z = 0; z <= 2; z++) {
+        for (int y = 0; y <= 2; y++) {
+        for (int x = 0; x <= 2; x++) {
+            
+            if (x == 1 && y == 1 && z == 1) continue; // Omitir centro
+
+            Cubie& cubie = m_cubies[getIndex(x, y, z)];
+
+            // 1. Calcular Matriz Model (Usando tu librería)
+            float px = (x - 1.0f) * m_spacing;
+            float py = (y - 1.0f) * m_spacing;
+            float pz = (z - 1.0f) * m_spacing;
+            translate(modelMatrix, px, py, pz); // C-style
+            shader.setMat4("model", modelMatrix);
+
+            // 2. Obtener Colores
+            faceColors[0] = getVec3FromColor(cubie.getFaceColor(Face::RIGHT));
+            faceColors[1] = getVec3FromColor(cubie.getFaceColor(Face::LEFT));
+            faceColors[2] = getVec3FromColor(cubie.getFaceColor(Face::UP));
+            faceColors[3] = getVec3FromColor(cubie.getFaceColor(Face::DOWN));
+            faceColors[4] = getVec3FromColor(cubie.getFaceColor(Face::FRONT));
+            faceColors[5] = getVec3FromColor(cubie.getFaceColor(Face::BACK));
+            shader.setVec3Array("u_faceColors", 6, faceColors);
+
+            // 3. Dibujar
+            glDrawArrays(GL_TRIANGLES, 0, 36);
+        }}}
+        
+        glBindVertexArray(0);
+    }
+
+private:
+    std::array<Cubie, 27> m_cubies;
+    GLuint m_VAO, m_VBO;
+    const float m_spacing = 1.05f;
+
+    int getIndex(int x, int y, int z) const { return x + y * 3 + z * 9; }
+
+    // Helper para convertir Enum a tu Vec3
+    Vec3 getVec3FromColor(Color color) {
+        switch (color) {
+            case Color::WHITE:  return Vec3(1.0f, 1.0f, 1.0f);
+            case Color::YELLOW: return Vec3(1.0f, 1.0f, 0.0f);
+            case Color::RED:    return Vec3(1.0f, 0.0f, 0.0f);
+            case Color::ORANGE: return Vec3(1.0f, 0.5f, 0.0f);
+            case Color::GREEN:  return Vec3(0.0f, 1.0f, 0.0f);
+            case Color::BLUE:   return Vec3(0.0f, 0.0f, 1.0f);
+            case Color::BLACK:
+            default:            return Vec3(0.0f, 0.0f, 0.0f); // Negro para 'discard'
+        }
+    }
+
+    // --- Lógica de Permutación (interna) ---
+    void rotateSliceZ(int slice, bool clockwise) {
+        std::array<Cubie, 8> tempRing;
+        int coords[8][2] = {{0,0}, {1,0}, {2,0}, {2,1}, {2,2}, {1,2}, {0,2}, {0,1}};
+        for (int i=0; i<8; ++i) tempRing[i] = m_cubies[getIndex(coords[i][0], coords[i][1], slice)];
+        int shift = clockwise ? 2 : -2;
+        for (int i=0; i<8; ++i) m_cubies[getIndex(coords[(i+shift+8)%8][0], coords[(i+shift+8)%8][1], slice)] = tempRing[i];
+        for (int y=0; y<=2; y++) for (int x=0; x<=2; x++) m_cubies[getIndex(x,y,slice)].rotateZ(clockwise);
+    }
+    void rotateSliceY(int slice, bool clockwise) {
+        std::array<Cubie, 8> tempRing;
+        int coords[8][2] = {{0,0}, {1,0}, {2,0}, {2,1}, {2,2}, {1,2}, {0,2}, {0,1}};
+        for (int i=0; i<8; ++i) tempRing[i] = m_cubies[getIndex(coords[i][0], slice, coords[i][1])];
+        int shift = clockwise ? 2 : -2;
+        for (int i=0; i<8; ++i) m_cubies[getIndex(coords[(i+shift+8)%8][0], slice, coords[(i+shift+8)%8][1])] = tempRing[i];
+        for (int z=0; z<=2; z++) for (int x=0; x<=2; x++) m_cubies[getIndex(x,slice,z)].rotateY(clockwise);
+    }
+    void rotateSliceX(int slice, bool clockwise) {
+        std::array<Cubie, 8> tempRing;
+        int coords[8][2] = {{0,0}, {1,0}, {2,0}, {2,1}, {2,2}, {1,2}, {0,2}, {0,1}};
+        for (int i=0; i<8; ++i) tempRing[i] = m_cubies[getIndex(slice, coords[i][0], coords[i][1])];
+        int shift = clockwise ? 2 : -2;
+        for (int i=0; i<8; ++i) m_cubies[getIndex(slice, coords[(i+shift+8)%8][0], coords[(i+shift+8)%8][1])] = tempRing[i];
+        for (int z=0; z<=2; z++) for (int y=0; y<=2; y++) m_cubies[getIndex(slice,y,z)].rotateX(clockwise);
+    }
+};
+
+
+// --- 7. GLOBALES Y CALLBACKS ---
+RubiksCube* g_rubiksCube = nullptr; // Puntero global para el callback
+bool keyProcessed[348] = {false}; // Array para manejar el input
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (g_rubiksCube == nullptr) return;
+    bool clockwise = !(mods & GLFW_MOD_SHIFT); // Shift = Anti-horario
+
+    if (action == GLFW_PRESS && !keyProcessed[key]) {
+        keyProcessed[key] = true;
+        if (key == GLFW_KEY_F) g_rubiksCube->rotateFace(Face::FRONT, clockwise);
+        // (Añadir más teclas aquí: U, D, L, R, B)
+        if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
+    }
+    if (action == GLFW_RELEASE) {
+        keyProcessed[key] = false;
     }
 }
 
 
-//--------------------------------------------teclado-----------------------------------------
-void key(GLFWwindow* window, int key, int scancode, int action, int mods)
-{
-
-    // cerrar ventana
-    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
-
-}
-
-
-//--------------------------------------programa main------------------------------------
-int main()
-{
+// --- 8. FUNCIÓN MAIN ---
+int main() {
+    // 1. Inicializar GLFW y GLAD
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "LearnOpenGL", NULL, NULL);
-    if (window == NULL)
-    {
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Esqueleto Cubo Rubik", NULL, NULL);
+    if (window == NULL) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return -1;
     }
     glfwMakeContextCurrent(window);
-	glfwSetKeyCallback(window, key);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetKeyCallback(window, key_callback);
 
-    if (!gladLoadGL(glfwGetProcAddress))
-    {
+    if (!gladLoadGL(glfwGetProcAddress)) {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
 
-    // vertex shader
-    unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
-    glCompileShader(vertexShader);
-    int success;
-    char infoLog[512];
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
-    if (!success)
-    {
-        glGetShaderInfoLog(vertexShader, 512, NULL, infoLog);
-        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
-    }
-	
-    // fragment shader
-    unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
-    glCompileShader(fragmentShader);
-    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
-    if (!success)
-    {
-        glGetShaderInfoLog(fragmentShader, 512, NULL, infoLog);
-        std::cout << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << infoLog << std::endl;
-    }
-	
-    // link shaders
-    unsigned int shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-	int colorLocation = glGetUniformLocation(shaderProgram, "uColor");
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-    if (!success) {
-        glGetProgramInfoLog(shaderProgram, 512, NULL, infoLog);
-        std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
-    }
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-	
+    // 2. Configurar OpenGL
+    glEnable(GL_DEPTH_TEST);
+    glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
 
-	//----------------declarando figuras---------------
+    // 3. Cargar Shaders (desde los strings internos)
+    Shader cubieShader(vertexShaderSource, fragmentShaderSource);
 
-	RubiksCube rubiksCube;
-    rubiksCube.setupMesh(cubieShader); // ¡Importante!
+    // 4. Crear el Cubo
+    RubiksCube rubiksCube;
+    rubiksCube.setupMesh();
+    g_rubiksCube = &rubiksCube; // Asignar al puntero global
 
-	glLineWidth(2.0);
-	glPointSize(5.0);
-	
-    //teclas para movimiento
-	std::cout<<"Seleccione alguna opcion para el movimiento: "<<std::endl;
-	std::cout<<"1 para estrella: "<<std::endl;
-	std::cout<<"2 para la piramide: "<<std::endl; 		
-	std::cout<<"Traslacion: A W S D"<<std::endl;
-	std::cout<<"Rotacion: up down left right"<<std::endl;
-	std::cout<<"Escala: U I"<<std::endl;
+    std::cout << "Controles: Presiona 'F' para girar la cara frontal." << std::endl;
+    std::cout << "Mantén 'SHIFT' + 'F' para girar en sentido anti-horario." << std::endl;
 
-	
-	while (!glfwWindowShouldClose(window))
-    {
-		
-        // render
-		int w,h; 
-		glfwGetFramebufferSize(window,&w,&h);
-		glViewport(0,0,w,h);
-        glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-		
-		static double lastClear = 0.0;
-		double currentTime = glfwGetTime(); 
+    // 5. Bucle Principal
+    while (!glfwWindowShouldClose(window)) {
+        // Limpiar
+        glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		// limpia cada 0.2 segundos (ajusta a gusto)
-		if (currentTime - lastClear > 0.2) {
-			glClear(GL_COLOR_BUFFER_BIT);
-			lastClear = currentTime;
-		}
-		
-		//camara
-		Vec3 target(0, 0, 0);
-		Vec3 eye(0, 0, 5);
-		Vec3 up(0.0f, 1.0f, 0.0f);
-		Mat4 V = lookAt(eye, target, up);
-		
-		//con perspectiva
-		//Mat4 P = perspective(90.0f, (float)w / (float)h, 0.1f, 100.0f);
-		
-		//sin perspectiva
-		float aspect = (float)w / (float)h;
-		Mat4 P = ortho(-aspect, aspect, -1.0f, 1.0f, 0.1f, 100.0f);
+        // 6. Configurar Cámara (Usando tu librería)
+        // Cámara orbitando para mostrar que es 3D
+        float time = (float)glfwGetTime();
+        float camX = sin(time) * 5.0f;
+        float camZ = cos(time) * 5.0f;
 
-		
-		unsigned int locV = glGetUniformLocation(shaderProgram, "view");
-		unsigned int locP = glGetUniformLocation(shaderProgram, "projection");
+        // Usamos tus structs y funciones
+        Vec3 eye(camX, 3.0f, camZ);
+        Vec3 center(0.0f, 0.0f, 0.0f);
+        Vec3 up(0.0f, 1.0f, 0.0f);
 
-		glUseProgram(shaderProgram);
-		glUniformMatrix4fv(locV, 1, GL_FALSE, V.m);
-		glUniformMatrix4fv(locP, 1, GL_FALSE, P.m);
-		
-		rubiksCube.draw(cubieShader, view, projection);
-			
-		glBindVertexArray(0);
-		glfwSwapBuffers(window);
-		glfwPollEvents();
-		
-	
+        Mat4 view = lookAt(eye, center, up);
+        Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / SCR_HEIGHT, 0.1f, 100.0f);
+        
+        // 7. Dibujar
+        rubiksCube.draw(cubieShader, view, proj);
+
+        // 8. Swap y Poll
+        glfwSwapBuffers(window);
+        glfwPollEvents();
     }
 
-/*
-    glDeleteVertexArrays(1, &pyramid.VAO);
-    glDeleteBuffers(1, &pyramid.VBO);
-    glDeleteBuffers(1, &pyramid.EBO);
-	
-	glDeleteVertexArrays(1, &star.VAO);
-    glDeleteBuffers(1, &star.VBO);
-    glDeleteBuffers(1, &star.EBO);
-	
-	*/
-    glDeleteProgram(shaderProgram);
-
+    // Limpieza
     glfwTerminate();
     return 0;
 }
-
-void framebuffer_size_callback(GLFWwindow* window, int width, int height)
-{
-    glViewport(0, 0, width, height);
-}
-
-
-
-
