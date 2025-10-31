@@ -126,6 +126,7 @@ public:
     ~RubiksCube() {
         glDeleteVertexArrays(1, &m_VAO);
         glDeleteBuffers(1, &m_VBO);
+		glDeleteBuffers(1, &m_EBO);
     }
 
 	
@@ -150,13 +151,26 @@ public:
             {{-s,-s,-s}, 5}, {{-s, s,-s}, 5}, {{s, s,-s}, 5},// Back Face 
             {{s, s,-s}, 5}, {{s,-s,-s}, 5}, {{-s,-s,-s}, 5}
         };
+		
+		const unsigned int indices[36] = {
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 
+			18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
+		};
+		
+		
 
         glGenVertexArrays(1, &m_VAO);
         glGenBuffers(1, &m_VBO);
+		glGenBuffers(1, &m_EBO);
+		
         glBindVertexArray(m_VAO);
-        glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
+        // VBO
+		glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
         glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
-
+		// EBO
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+		
         GLsizei stride = sizeof(Vertex);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, pos));
         glEnableVertexAttribArray(0);
@@ -165,10 +179,8 @@ public:
         glBindVertexArray(0);
     }
 
-    void draw(Shader& shader, const Mat4& view, const Mat4& projection) {
-        shader.use();
-        shader.setMat4("projection", projection.m);
-        shader.setMat4("view", view.m);
+    void draw(Shader& shader) {
+        //shader.use();
 
         glBindVertexArray(m_VAO);
         Vec3 faceColors[6];
@@ -186,7 +198,7 @@ public:
             faceColors[5] = getVec3FromColor(cubie.getFaceColor(Face::BACK));
             shader.setVec3Array("u_faceColors", 6, faceColors);
 			// 
-            glDrawArrays(GL_TRIANGLES, 0, 36);
+            glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
 
         }
         glBindVertexArray(0);
@@ -194,7 +206,7 @@ public:
 
 private:
     std::array<Cubie, 27> m_cubies;
-    GLuint m_VAO, m_VBO;
+    GLuint m_VAO, m_VBO, m_EBO;
     const float m_spacing = 1.05f;
 
     int getIndex(int x, int y, int z) const { return x + y * 3 + z * 9; }
@@ -292,8 +304,10 @@ int main() {
 
         Mat4 view = lookAt(eye, center, up);
         Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-        
-        rubiksCube.draw(cubieShader, view, proj);
+        cubieShader.use();       
+		cubieShader.setMat4("projection", proj.m);
+        cubieShader.setMat4("view", view.m);
+        rubiksCube.draw(cubieShader);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
