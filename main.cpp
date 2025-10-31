@@ -105,6 +105,50 @@ public:
         float pz = (z - 1.0f) * spacing;
         translate(this->modelMatrix, px, py, pz);
     }
+	
+	// --- NUEVOS: rotaciones de colores internas (no tocan modelMatrix) ---
+    // Rotación de colores alrededor de Y: clockwise visto desde arriba
+    void rotateFacesYClockwise() {
+        Color oldLeft  = m_faces[Face::LEFT];
+        Color oldFront = m_faces[Face::FRONT];
+        Color oldRight = m_faces[Face::RIGHT];
+        Color oldBack  = m_faces[Face::BACK];
+
+        // mapping clockwise: LEFT <- FRONT, FRONT <- RIGHT, RIGHT <- BACK, BACK <- LEFT
+        m_faces[Face::RIGHT] = oldFront;
+        m_faces[Face::BACK]  = oldRight;
+        m_faces[Face::LEFT]  = oldBack;
+        m_faces[Face::FRONT] = oldLeft;
+        // UP and DOWN remain unchanged
+    }
+
+    // If you later need CCW or rotations on X/Z, puedes añadirlos:
+    void rotateFacesYCounterClockwise() {
+        // inverse of clockwise
+        Color oldLeft  = m_faces[Face::LEFT];
+        Color oldFront = m_faces[Face::FRONT];
+        Color oldRight = m_faces[Face::RIGHT];
+        Color oldBack  = m_faces[Face::BACK];
+
+        m_faces[Face::RIGHT] = oldBack;
+        m_faces[Face::BACK]  = oldLeft;
+        m_faces[Face::LEFT]  = oldFront;
+        m_faces[Face::FRONT] = oldRight;
+    }
+
+    // (Opcional) Rotación alrededor de X (sentido que haga falta) — útil para otras capas:
+    void rotateFacesXClockwise() {
+        Color oldUp    = m_faces[Face::UP];
+        Color oldFront = m_faces[Face::FRONT];
+        Color oldDown  = m_faces[Face::DOWN];
+        Color oldBack  = m_faces[Face::BACK];
+
+        m_faces[Face::UP]    = oldFront;
+        m_faces[Face::BACK]  = oldUp;
+        m_faces[Face::DOWN]  = oldBack;
+        m_faces[Face::FRONT] = oldDown;
+        // LEFT/RIGHT stay
+    }
 
 private:
     std::map<Face, Color> m_faces;
@@ -252,6 +296,105 @@ public:
         glBindVertexArray(0);
     }
 
+	// Rotar la capa UP (y == 2) 90° clockwise visto desde arriba
+	void rotateUpLayerClockwise() {
+		// Guardamos la capa en una matriz 3x3 (índices por x,z)
+		std::array<Cubie, 9> layerOld;
+		for (int z = 0; z < 3; ++z) {
+			for (int x = 0; x < 3; ++x) {
+				int idx = getIndex(x, 2, z);
+				layerOld[x + z*3] = m_cubies[idx]; // copia
+			}
+		}
+
+		// Creamos la nueva disposición: mapping clockwise visto desde arriba:
+		// newX = z; newZ = 2 - x
+		std::array<Cubie, 9> layerNew;
+		for (int z = 0; z < 3; ++z) {
+			for (int x = 0; x < 3; ++x) {
+				int newX = z;
+				int newZ = 2 - x;
+				layerNew[newX + newZ*3] = layerOld[x + z*3];
+			}
+		}
+
+		// Colocamos las piezas en m_cubies con las nuevas posiciones y actualizamos modelMatrix e faces
+		for (int newZ = 0; newZ < 3; ++newZ) {
+			for (int newX = 0; newX < 3; ++newX) {
+				int destIdx = getIndex(newX, 2, newZ);
+				// Re-init la posición física en mundo (centros en x,y,z)
+				layerNew[newX + newZ*3].init(newX, 2, newZ, m_spacing);
+				// Rotamos la asignación de colores internamente (porque la pieza gira)
+				layerNew[newX + newZ*3].rotateFacesYClockwise();
+				// Copiamos de vuelta
+				m_cubies[destIdx] = layerNew[newX + newZ*3];
+			}
+		}
+	}
+	
+	void rotateMiddleLayerClockwise() {
+		// y == 1
+		std::array<Cubie, 9> layerOld;
+		for (int z = 0; z < 3; ++z) {
+			for (int x = 0; x < 3; ++x) {
+				int idx = getIndex(x, 1, z);
+				layerOld[x + z*3] = m_cubies[idx];
+			}
+		}
+
+		// (x,z) -> (z, 2 - x)
+		std::array<Cubie, 9> layerNew;
+		for (int z = 0; z < 3; ++z) {
+			for (int x = 0; x < 3; ++x) {
+				int newX = z;
+				int newZ = 2 - x;
+				layerNew[newX + newZ*3] = layerOld[x + z*3];
+			}
+		}
+
+		// Aplicar nueva disposición
+		for (int newZ = 0; newZ < 3; ++newZ) {
+			for (int newX = 0; newX < 3; ++newX) {
+				int destIdx = getIndex(newX, 1, newZ);
+				layerNew[newX + newZ*3].init(newX, 1, newZ, m_spacing);
+				layerNew[newX + newZ*3].rotateFacesYClockwise();
+				m_cubies[destIdx] = layerNew[newX + newZ*3];
+			}
+		}
+	}
+
+
+	// ---------------- ROTACIÓN CAPA INFERIOR (DOWN) ----------------
+	void rotateDownLayerClockwise() {
+		// y == 0
+		std::array<Cubie, 9> layerOld;
+		for (int z = 0; z < 3; ++z) {
+			for (int x = 0; x < 3; ++x) {
+				int idx = getIndex(x, 0, z);
+				layerOld[x + z*3] = m_cubies[idx];
+			}
+		}
+
+		// (x,z) -> (z, 2 - x)
+		std::array<Cubie, 9> layerNew;
+		for (int z = 0; z < 3; ++z) {
+			for (int x = 0; x < 3; ++x) {
+				int newX = z;
+				int newZ = 2 - x;
+				layerNew[newX + newZ*3] = layerOld[x + z*3];
+			}
+		}
+
+		for (int newZ = 0; newZ < 3; ++newZ) {
+			for (int newX = 0; newX < 3; ++newX) {
+				int destIdx = getIndex(newX, 0, newZ);
+				layerNew[newX + newZ*3].init(newX, 0, newZ, m_spacing);
+				layerNew[newX + newZ*3].rotateFacesYClockwise();
+				m_cubies[destIdx] = layerNew[newX + newZ*3];
+			}
+		}
+	}
+	
 private:
     std::array<Cubie, 27> m_cubies;
     GLuint m_VAO, m_VBO;
@@ -279,10 +422,9 @@ private:
 // --- 7. GLOBALES Y CALLBACKS ---
 
 RubiksCube* g_rubiksCube = nullptr;
-
 bool keyProcessed[348] = {false};
-
 Vec3 g_cameraPos(0.0f, 0.0f, 5.0f); 
+
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (g_rubiksCube == nullptr) return;
@@ -293,10 +435,21 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         switch (key) {
             case GLFW_KEY_W: g_cameraPos.z -= cameraSpeed; break;
             case GLFW_KEY_S: g_cameraPos.z += cameraSpeed; break;
-            case GLFW_KEY_A: g_cameraPos.x -= cameraSpeed; break;
-            case GLFW_KEY_D: g_cameraPos.x += cameraSpeed; break;
-            case GLFW_KEY_Q: g_cameraPos.y += cameraSpeed; break; // Arriba
-            case GLFW_KEY_E: g_cameraPos.y -= cameraSpeed; break; // Abajo
+            case GLFW_KEY_LEFT: g_cameraPos.x -= cameraSpeed; break;
+            case GLFW_KEY_RIGHT: g_cameraPos.x += cameraSpeed; break;
+            case GLFW_KEY_UP: g_cameraPos.y += cameraSpeed; break; // Arriba
+            case GLFW_KEY_DOWN: g_cameraPos.y -= cameraSpeed; break; // Abajo
+			
+			case GLFW_KEY_U:
+				g_rubiksCube->rotateUpLayerClockwise();
+				break;
+			case GLFW_KEY_M:
+				g_rubiksCube->rotateMiddleLayerClockwise();
+				break;
+			case GLFW_KEY_D:
+				g_rubiksCube->rotateDownLayerClockwise();
+				break;
+
         }
     }
 
