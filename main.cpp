@@ -81,6 +81,9 @@ enum class Color { WHITE, YELLOW, RED, ORANGE, GREEN, BLUE, BLACK };
 enum class Face { UP, DOWN, LEFT, RIGHT, FRONT, BACK };
 //using FaceColors = std::map<Face, Color>;
 
+bool g_counterClockwise = false;
+
+
 // CLASE CUBIE: Almacena el estado de color de 1 pieza
 class Cubie {
 public:
@@ -122,7 +125,6 @@ public:
         // UP and DOWN remain unchanged
     }
 
-    // If you later need CCW or rotations on X/Z, puedes añadirlos:
     void rotateFacesYCounterClockwise() {
         // inverse of clockwise
         Color oldLeft  = m_faces[Face::LEFT];
@@ -136,19 +138,62 @@ public:
         m_faces[Face::FRONT] = oldRight;
     }
 
-    // (Opcional) Rotación alrededor de X (sentido que haga falta) — útil para otras capas:
     void rotateFacesXClockwise() {
-        Color oldUp    = m_faces[Face::UP];
-        Color oldFront = m_faces[Face::FRONT];
-        Color oldDown  = m_faces[Face::DOWN];
-        Color oldBack  = m_faces[Face::BACK];
+		Color oldUp    = m_faces[Face::UP];
+		Color oldFront = m_faces[Face::FRONT];
+		Color oldDown  = m_faces[Face::DOWN];
+		Color oldBack  = m_faces[Face::BACK];
 
-        m_faces[Face::UP]    = oldFront;
-        m_faces[Face::BACK]  = oldUp;
-        m_faces[Face::DOWN]  = oldBack;
-        m_faces[Face::FRONT] = oldDown;
-        // LEFT/RIGHT stay
-    }
+		// UP → BACK → DOWN → FRONT → UP
+		m_faces[Face::BACK]  = oldUp;
+		m_faces[Face::DOWN]  = oldBack;
+		m_faces[Face::FRONT] = oldDown;
+		m_faces[Face::UP]    = oldFront;
+		// LEFT/RIGHT stay the same
+	}
+
+	
+	void rotateFacesXCounterClockwise() {
+		Color oldUp    = m_faces[Face::UP];
+		Color oldFront = m_faces[Face::FRONT];
+		Color oldDown  = m_faces[Face::DOWN];
+		Color oldBack  = m_faces[Face::BACK];
+
+		// UP → FRONT → DOWN → BACK → UP
+		m_faces[Face::FRONT] = oldUp;
+		m_faces[Face::DOWN]  = oldFront;
+		m_faces[Face::BACK]  = oldDown;
+		m_faces[Face::UP]    = oldBack;
+		// LEFT/RIGHT stay the same
+	}
+	
+	// ---------------- ROTACIÓN DE COLORES EN EJE Z ----------------
+	void rotateFacesZClockwise() {
+		Color oldUp    = m_faces[Face::UP];
+		Color oldRight = m_faces[Face::RIGHT];
+		Color oldDown  = m_faces[Face::DOWN];
+		Color oldLeft  = m_faces[Face::LEFT];
+		
+		m_faces[Face::UP] = oldLeft;
+		m_faces[Face::LEFT] = oldDown;
+		m_faces[Face::DOWN] = oldRight;
+		m_faces[Face::RIGHT] = oldUp;
+	}
+
+	void rotateFacesZCounterClockwise() {
+		Color oldUp    = m_faces[Face::UP];
+		Color oldRight = m_faces[Face::RIGHT];
+		Color oldDown  = m_faces[Face::DOWN];
+		Color oldLeft  = m_faces[Face::LEFT];
+		
+		m_faces[Face::UP] = oldRight;
+		m_faces[Face::RIGHT] = oldDown;
+		m_faces[Face::DOWN] = oldLeft;
+		m_faces[Face::LEFT] = oldUp;
+	}
+
+
+
 
 private:
     std::map<Face, Color> m_faces;
@@ -236,8 +281,6 @@ public:
 
 
 		};
-		
-		
 
         glGenVertexArrays(1, &m_VAO);
         glGenBuffers(1, &m_VBO);
@@ -253,7 +296,7 @@ public:
 		// EBO BORDER_INDICES
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_bordes); 
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(BORDER_INDICES), BORDER_INDICES, GL_STATIC_DRAW);
-		//
+		
         GLsizei stride = sizeof(Vertex);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, pos));
         glEnableVertexAttribArray(0);
@@ -283,12 +326,10 @@ public:
 			
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_relleno); 
 			shader.setFloat("u_isBorder", 0.0f);
-			glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 			glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
 			 
-			glLineWidth(3.0f);
+			glLineWidth(10.0f);
 			shader.setFloat("u_isBorder", 1.0f);
-			glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_bordes); 
 			glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, 0);
             //glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
@@ -312,8 +353,18 @@ public:
 		std::array<Cubie, 9> layerNew;
 		for (int z = 0; z < 3; ++z) {
 			for (int x = 0; x < 3; ++x) {
-				int newX = z;
-				int newZ = 2 - x;
+				int newX, newZ;
+
+				if (g_counterClockwise) {
+					// Sentido antihorario (CounterClockwise)
+					newX = 2 - z;
+					newZ = x;
+				} else {
+					// Sentido horario (Clockwise)
+					newX = z;
+					newZ = 2 - x;
+				}
+
 				layerNew[newX + newZ*3] = layerOld[x + z*3];
 			}
 		}
@@ -325,10 +376,14 @@ public:
 				// Re-init la posición física en mundo (centros en x,y,z)
 				layerNew[newX + newZ*3].init(newX, 2, newZ, m_spacing);
 				// Rotamos la asignación de colores internamente (porque la pieza gira)
-				layerNew[newX + newZ*3].rotateFacesYClockwise();
+				if (g_counterClockwise)
+					layerNew[newX + newZ*3].rotateFacesYCounterClockwise();
+				else
+					layerNew[newX + newZ*3].rotateFacesYClockwise();
+
 				// Copiamos de vuelta
 				m_cubies[destIdx] = layerNew[newX + newZ*3];
-			}
+			} 
 		}
 	}
 	
@@ -346,8 +401,18 @@ public:
 		std::array<Cubie, 9> layerNew;
 		for (int z = 0; z < 3; ++z) {
 			for (int x = 0; x < 3; ++x) {
-				int newX = z;
-				int newZ = 2 - x;
+				int newX, newZ;
+
+				if (g_counterClockwise) {
+					// Sentido antihorario (CounterClockwise)
+					newX = 2 - z;
+					newZ = x;
+				} else {
+					// Sentido horario (Clockwise)
+					newX = z;
+					newZ = 2 - x;
+				}
+
 				layerNew[newX + newZ*3] = layerOld[x + z*3];
 			}
 		}
@@ -357,7 +422,11 @@ public:
 			for (int newX = 0; newX < 3; ++newX) {
 				int destIdx = getIndex(newX, 1, newZ);
 				layerNew[newX + newZ*3].init(newX, 1, newZ, m_spacing);
-				layerNew[newX + newZ*3].rotateFacesYClockwise();
+				if (g_counterClockwise)
+					layerNew[newX + newZ*3].rotateFacesYCounterClockwise();
+				else
+					layerNew[newX + newZ*3].rotateFacesYClockwise();
+
 				m_cubies[destIdx] = layerNew[newX + newZ*3];
 			}
 		}
@@ -379,8 +448,18 @@ public:
 		std::array<Cubie, 9> layerNew;
 		for (int z = 0; z < 3; ++z) {
 			for (int x = 0; x < 3; ++x) {
-				int newX = z;
-				int newZ = 2 - x;
+				int newX, newZ;
+
+				if (g_counterClockwise) {
+					// Sentido antihorario (CounterClockwise)
+					newX = 2 - z;
+					newZ = x;
+				} else {
+					// Sentido horario (Clockwise)
+					newX = z;
+					newZ = 2 - x;
+				}
+
 				layerNew[newX + newZ*3] = layerOld[x + z*3];
 			}
 		}
@@ -389,10 +468,222 @@ public:
 			for (int newX = 0; newX < 3; ++newX) {
 				int destIdx = getIndex(newX, 0, newZ);
 				layerNew[newX + newZ*3].init(newX, 0, newZ, m_spacing);
-				layerNew[newX + newZ*3].rotateFacesYClockwise();
+				if (g_counterClockwise)
+					layerNew[newX + newZ*3].rotateFacesYCounterClockwise();
+				else
+					layerNew[newX + newZ*3].rotateFacesYClockwise();
+
 				m_cubies[destIdx] = layerNew[newX + newZ*3];
 			}
 		}
+	}
+	
+	// ---------------- ROTACIÓN CAPA DERECHA (x == 2) ----------------
+	void rotateRightLayerClockwise() {
+		std::array<Cubie, 9> layerOld;
+		for (int z = 0; z < 3; ++z)
+			for (int y = 0; y < 3; ++y)
+				layerOld[y + z*3] = m_cubies[getIndex(2, y, z)];
+
+		// (y,z) -> (z, 2 - y)
+		std::array<Cubie, 9> layerNew;
+		for (int z = 0; z < 3; ++z)
+			for (int y = 0; y < 3; ++y) {
+				int newY, newZ;
+				if (g_counterClockwise) {
+					// visto desde la derecha (−X)
+					newY = 2 - z;
+					newZ = y;
+				} else {
+					// horario visto desde la derecha (−X)
+					newY = z;
+					newZ = 2 - y;
+				}
+				layerNew[newY + newZ*3] = layerOld[y + z*3];
+			}
+
+		for (int newZ = 0; newZ < 3; ++newZ)
+			for (int newY = 0; newY < 3; ++newY) {
+				int destIdx = getIndex(2, newY, newZ);
+				layerNew[newY + newZ*3].init(2, newY, newZ, m_spacing);
+				if (g_counterClockwise)
+					layerNew[newY + newZ*3].rotateFacesXCounterClockwise();
+				else
+					layerNew[newY + newZ*3].rotateFacesXClockwise();
+
+				m_cubies[destIdx] = layerNew[newY + newZ*3];
+			}
+	}
+
+	// ---------------- ROTACIÓN CAPA MEDIA VERTICAL (x == 1) ----------------
+	void rotateMiddleVerticalClockwise() {
+		std::array<Cubie, 9> layerOld;
+		for (int z = 0; z < 3; ++z)
+			for (int y = 0; y < 3; ++y)
+				layerOld[y + z*3] = m_cubies[getIndex(1, y, z)];
+
+		std::array<Cubie, 9> layerNew;
+		for (int z = 0; z < 3; ++z)
+			for (int y = 0; y < 3; ++y) {
+				int newY, newZ;
+				if (g_counterClockwise) {
+					newY = 2 - z;
+					newZ = y;
+				} else {
+					newY = z;
+					newZ = 2 - y;
+				}
+				layerNew[newY + newZ*3] = layerOld[y + z*3];
+			}
+
+		for (int newZ = 0; newZ < 3; ++newZ)
+			for (int newY = 0; newY < 3; ++newY) {
+				int destIdx = getIndex(1, newY, newZ);
+				layerNew[newY + newZ*3].init(1, newY, newZ, m_spacing);
+				if (g_counterClockwise)
+					layerNew[newY + newZ*3].rotateFacesXCounterClockwise();
+				else
+					layerNew[newY + newZ*3].rotateFacesXClockwise();
+
+				m_cubies[destIdx] = layerNew[newY + newZ*3];
+			}
+	}
+
+	// ---------------- ROTACIÓN CAPA IZQUIERDA (x == 0) ----------------
+	void rotateLeftLayerClockwise() {
+		std::array<Cubie, 9> layerOld;
+		for (int z = 0; z < 3; ++z)
+			for (int y = 0; y < 3; ++y)
+				layerOld[y + z*3] = m_cubies[getIndex(0, y, z)];
+
+		std::array<Cubie, 9> layerNew;
+		for (int z = 0; z < 3; ++z)
+			for (int y = 0; y < 3; ++y) {
+				int newY, newZ;
+				if (g_counterClockwise) {
+					newY = 2 - z;
+					newZ = y;
+				} else {
+					newY = z;
+					newZ = 2 - y;
+				}
+				layerNew[newY + newZ*3] = layerOld[y + z*3];
+			}
+
+		for (int newZ = 0; newZ < 3; ++newZ)
+			for (int newY = 0; newY < 3; ++newY) {
+				int destIdx = getIndex(0, newY, newZ);
+				layerNew[newY + newZ*3].init(0, newY, newZ, m_spacing);
+				if (g_counterClockwise)
+					layerNew[newY + newZ*3].rotateFacesXCounterClockwise();
+				else
+					layerNew[newY + newZ*3].rotateFacesXClockwise();
+
+				m_cubies[destIdx] = layerNew[newY + newZ*3];
+			}
+	}
+	
+	// ---------------- ROTACIÓN CAPA FRONTAL (z == 2) ----------------
+	void rotateFrontLayerClockwise() {
+		std::array<Cubie, 9> layerOld;
+		for (int y = 0; y < 3; ++y)
+			for (int x = 0; x < 3; ++x)
+				layerOld[x + y * 3] = m_cubies[getIndex(x, y, 2)];
+
+		std::array<Cubie, 9> layerNew;
+		for (int y = 0; y < 3; ++y)
+			for (int x = 0; x < 3; ++x) {
+				int newX, newY;
+				if (g_counterClockwise) {
+					newX = 2 - y;
+					newY = x;
+				} else {
+					newX = y;
+					newY = 2 - x;
+				}
+				layerNew[newX + newY * 3] = layerOld[x + y * 3];
+			}
+
+		for (int newY = 0; newY < 3; ++newY)
+			for (int newX = 0; newX < 3; ++newX) {
+				int destIdx = getIndex(newX, newY, 2);
+				layerNew[newX + newY * 3].init(newX, newY, 2, m_spacing);
+				if (g_counterClockwise)
+					layerNew[newX + newY * 3].rotateFacesZCounterClockwise();
+				else
+					layerNew[newX + newY * 3].rotateFacesZClockwise();
+
+				m_cubies[destIdx] = layerNew[newX + newY * 3];
+			}
+	}
+
+	// ---------------- ROTACIÓN CAPA MEDIA PROFUNDIDAD (z == 1) ----------------
+	void rotateMiddleDepthClockwise() {
+		std::array<Cubie, 9> layerOld;
+		for (int y = 0; y < 3; ++y)
+			for (int x = 0; x < 3; ++x)
+				layerOld[x + y * 3] = m_cubies[getIndex(x, y, 1)];
+
+		std::array<Cubie, 9> layerNew;
+		for (int y = 0; y < 3; ++y)
+			for (int x = 0; x < 3; ++x) {
+				int newX, newY;
+				if (g_counterClockwise) {
+					newX = 2 - y;
+					newY = x;
+				} else {
+					newX = y;
+					newY = 2 - x;
+				}
+				layerNew[newX + newY * 3] = layerOld[x + y * 3];
+			}
+
+		for (int newY = 0; newY < 3; ++newY)
+			for (int newX = 0; newX < 3; ++newX) {
+				int destIdx = getIndex(newX, newY, 1);
+				layerNew[newX + newY * 3].init(newX, newY, 1, m_spacing);
+				if (g_counterClockwise)
+					layerNew[newX + newY * 3].rotateFacesZCounterClockwise();
+				else
+					layerNew[newX + newY * 3].rotateFacesZClockwise();
+
+				m_cubies[destIdx] = layerNew[newX + newY * 3];
+			}
+	}
+	
+	// ---------------- ROTACIÓN CAPA TRASERA (z == 0) ----------------
+	void rotateBackLayerClockwise() {
+		std::array<Cubie, 9> layerOld;
+		for (int y = 0; y < 3; ++y)
+			for (int x = 0; x < 3; ++x)
+				layerOld[x + y * 3] = m_cubies[getIndex(x, y, 0)];
+
+		std::array<Cubie, 9> layerNew;
+		for (int y = 0; y < 3; ++y)
+			for (int x = 0; x < 3; ++x) {
+				int newX, newY;
+				if (g_counterClockwise) {
+					// Ojo: visto desde atrás, el sentido se invierte
+					newX = 2 - y;
+					newY = x;
+				} else {
+					newX = y;
+					newY = 2 - x;
+				}
+				layerNew[newX + newY * 3] = layerOld[x + y * 3];
+			}
+
+		for (int newY = 0; newY < 3; ++newY)
+			for (int newX = 0; newX < 3; ++newX) {
+				int destIdx = getIndex(newX, newY, 0);
+				layerNew[newX + newY * 3].init(newX, newY, 0, m_spacing);
+				if (g_counterClockwise)
+					layerNew[newX + newY * 3].rotateFacesZCounterClockwise();
+				else
+					layerNew[newX + newY * 3].rotateFacesZClockwise();
+
+				m_cubies[destIdx] = layerNew[newX + newY * 3];
+			}
 	}
 	
 private:
@@ -418,13 +709,81 @@ private:
     }
 };
 
-
-// --- 7. GLOBALES Y CALLBACKS ---
-
+//-------------------variables globales-----------------------
 RubiksCube* g_rubiksCube = nullptr;
 bool keyProcessed[348] = {false};
-Vec3 g_cameraPos(0.0f, 0.0f, 5.0f); 
+Vec3 g_cameraPos(0.0f, 0.0f, 5.0f);
 
+enum class ActiveFace { FRONT = 1, BACK, LEFT, RIGHT, UP, DOWN };
+ActiveFace g_activeFace = ActiveFace::FRONT;
+
+void rotateFromActiveFace(int key) {
+    if (!g_rubiksCube) return;
+
+    switch (g_activeFace) {
+        // ================= FRONT =================
+        case ActiveFace::FRONT:
+            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
+            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
+            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
+            if (key == GLFW_KEY_L) g_rubiksCube->rotateLeftLayerClockwise();
+            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
+            if (key == GLFW_KEY_R) g_rubiksCube->rotateRightLayerClockwise();
+            break;
+
+        // ================= BACK =================
+        case ActiveFace::BACK:
+            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
+            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
+            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
+            if (key == GLFW_KEY_L) g_rubiksCube->rotateRightLayerClockwise();   // invertido
+            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
+            if (key == GLFW_KEY_R) g_rubiksCube->rotateLeftLayerClockwise();    // invertido
+            break;
+
+        // ================= LEFT =================
+        case ActiveFace::LEFT:
+            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
+            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
+            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
+            if (key == GLFW_KEY_L) g_rubiksCube->rotateBackLayerClockwise();    // izquierda se convierte en back
+            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleDepthClockwise();
+            if (key == GLFW_KEY_R) g_rubiksCube->rotateFrontLayerClockwise();   // derecha se convierte en front
+            break;
+
+        // ================= RIGHT =================
+        case ActiveFace::RIGHT:
+            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
+            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
+            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
+            if (key == GLFW_KEY_L) g_rubiksCube->rotateFrontLayerClockwise();   // izquierda es front
+            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleDepthClockwise();
+            if (key == GLFW_KEY_R) g_rubiksCube->rotateBackLayerClockwise();    // derecha es back
+            break;
+
+        // ================= UP =================
+        case ActiveFace::UP:
+            if (key == GLFW_KEY_U) g_rubiksCube->rotateBackLayerClockwise();    // arriba mira hacia back
+            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleDepthClockwise();
+            if (key == GLFW_KEY_D) g_rubiksCube->rotateFrontLayerClockwise();   // abajo mira hacia front
+            if (key == GLFW_KEY_L) g_rubiksCube->rotateLeftLayerClockwise();
+            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
+            if (key == GLFW_KEY_R) g_rubiksCube->rotateRightLayerClockwise();
+            break;
+
+        // ================= DOWN =================
+        case ActiveFace::DOWN:
+            if (key == GLFW_KEY_U) g_rubiksCube->rotateFrontLayerClockwise();   // arriba mira hacia front
+            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleDepthClockwise();
+            if (key == GLFW_KEY_D) g_rubiksCube->rotateBackLayerClockwise();    // abajo mira hacia back
+            if (key == GLFW_KEY_L) g_rubiksCube->rotateLeftLayerClockwise();
+            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
+            if (key == GLFW_KEY_R) g_rubiksCube->rotateRightLayerClockwise();
+            break;
+    }
+}
+
+//--------------------CALLBACKS ------------------------------
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (g_rubiksCube == nullptr) return;
@@ -440,15 +799,31 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
             case GLFW_KEY_UP: g_cameraPos.y += cameraSpeed; break; // Arriba
             case GLFW_KEY_DOWN: g_cameraPos.y -= cameraSpeed; break; // Abajo
 			
-			case GLFW_KEY_U:
-				g_rubiksCube->rotateUpLayerClockwise();
+			case GLFW_KEY_C:
+				g_counterClockwise = !g_counterClockwise;
+				std::cout << "Modo de rotacion cambiado a: "
+						  << (g_counterClockwise ? "CounterClockwise" : "Clockwise")
+						  << std::endl;
 				break;
-			case GLFW_KEY_M:
-				g_rubiksCube->rotateMiddleLayerClockwise();
-				break;
-			case GLFW_KEY_D:
-				g_rubiksCube->rotateDownLayerClockwise();
-				break;
+
+			// ---------------- SELECCIÓN DE CARA ACTIVA ----------------
+            case GLFW_KEY_1: g_activeFace = ActiveFace::FRONT; std::cout << "Cara activa: FRONT\n"; break;
+            case GLFW_KEY_2: g_activeFace = ActiveFace::BACK;  std::cout << "Cara activa: BACK\n"; break;
+            case GLFW_KEY_3: g_activeFace = ActiveFace::LEFT;  std::cout << "Cara activa: LEFT\n"; break;
+            case GLFW_KEY_4: g_activeFace = ActiveFace::RIGHT; std::cout << "Cara activa: RIGHT\n"; break;
+            case GLFW_KEY_5: g_activeFace = ActiveFace::UP;    std::cout << "Cara activa: UP\n"; break;
+            case GLFW_KEY_6: g_activeFace = ActiveFace::DOWN;  std::cout << "Cara activa: DOWN\n"; break;
+
+            // ---------------- ROTACIONES DEPENDIENDO DE LA CARA ACTIVA ----------------
+            case GLFW_KEY_U:
+            case GLFW_KEY_M:
+            case GLFW_KEY_D:
+            case GLFW_KEY_L:
+            case GLFW_KEY_V:
+            case GLFW_KEY_R:
+                rotateFromActiveFace(key);
+                break;
+
 
         }
     }
