@@ -45,9 +45,26 @@ file(GLOB SOURCES "*.cpp" ${DEPENDENCY_DIR}/include/glad/glad/glad.c )
 file(GLOB HEADERS "*.h" )
 file(GLOB SHADERS "*.vert" "*.frag" "*.vs" "*.fs" )
 
+# --- KOCIEMBA RUBIK SOLVER (C SOURCES) -------------------
+set(KOCIEMBA_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/kociemba/ckociemba/cubiecube.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/kociemba/ckociemba/coordcube.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/kociemba/ckociemba/facecube.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/kociemba/ckociemba/prunetable_helpers.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/kociemba/ckociemba/search.c
+)
+
+
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/kociemba/ckociemba/include
+)
+
+
+
 add_executable(
  ${PROJECT_NAME} WIN32 MACOSX_BUNDLE  
  ${HEADERS} ${SOURCES} ${SHADERS}
+ ${KOCIEMBA_SRC}
  ${ICON} ${GLAD_GL}   )
 
 message( "\nBuild mode test is: ${CMAKE_BUILD_TYPE}" )

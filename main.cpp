@@ -17,6 +17,16 @@
 #include <fstream>
 #include <cstddef>      
 #include <algorithm>
+
+extern "C" {
+    #include "kociemba/ckociemba/include/search.h"
+}
+#include <queue>
+#include <string>
+#include <sstream>
+
+std::queue<std::string> g_animationQueue;
+
 // --- CONFIGURACIÓN ---
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
@@ -109,6 +119,18 @@ const char* fragmentShaderSource = R"glsl(
 enum class Color { WHITE, YELLOW, RED, ORANGE, GREEN, BLUE, BLACK };
 enum class Face { UP, DOWN, LEFT, RIGHT, FRONT, BACK };
 enum class Axis { X, Y, Z };
+char colorEnumToChar(Color c) {
+    switch (c) {
+        case Color::WHITE:  return 'U';
+        case Color::YELLOW: return 'D';
+        case Color::RED:    return 'F';
+        case Color::ORANGE: return 'B'; // Asumiendo Naranja (Orange) es Back
+        case Color::GREEN:  return 'L'; // Asumiendo Verde (Green) es Left
+        case Color::BLUE:   return 'R'; // Asumiendo Azul (Blue) es Right
+        default:            return ' '; // Error
+    }
+}
+
 //using FaceColors = std::map<Face, Color>;
 
 bool g_counterClockwise = false;
@@ -879,7 +901,61 @@ public:
 				m_cubies[destIdx] = layerNew[newX + newY * 3];
 			}
 	}
-	
+	std::string getFaceletString() {
+		char facelets[55]; // 54 + 1 para el '\0'
+			int idx = 0;
+
+			// --- Cara U (Up, y=2) ---
+			// Correcto: Lee U1..U9 (z=0, z=1, z=2)
+			for (int z = 0; z <= 2; z++) { // z=0 (Back), z=1, z=2 (Front)
+				for (int x = 0; x <= 2; x++) { // x=0 (Left), x=1, x=2 (Right)
+					facelets[idx++] = colorEnumToChar(getCubieAt(x, 2, z).getFaceColor(Face::UP));
+				}
+			}
+
+			// --- Cara R (Right, x=2) ---
+			// CORREGIDO: Lee R1..R9 (z=2, z=1, z=0)
+			for (int y = 2; y >= 0; y--) { 
+				for (int z = 2; z >= 0; z--) { // ¡CAMBIADO! de 0..2 a 2..0
+					facelets[idx++] = colorEnumToChar(getCubieAt(2, y, z).getFaceColor(Face::RIGHT));
+				}
+			}
+
+			// --- Cara F (Front, z=2) ---
+			// Correcto: Lee F1..F9 (y=2, y=1, y=0)
+			for (int y = 2; y >= 0; y--) {
+				for (int x = 0; x <= 2; x++) {
+					facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 2).getFaceColor(Face::FRONT));
+				}
+			}
+
+			// --- Cara D (Down, y=0) ---
+			// Correcto: Lee D1..D9 (z=2, z=1, z=0)
+			for (int z = 2; z >= 0; z--) {
+				for (int x = 0; x <= 2; x++) {
+					facelets[idx++] = colorEnumToChar(getCubieAt(x, 0, z).getFaceColor(Face::DOWN));
+				}
+			}
+
+			// --- Cara L (Left, x=0) ---
+			// CORREGIDO: Lee L1..L9 (z=0, z=1, z=2)
+			for (int y = 2; y >= 0; y--) {
+				for (int z = 0; z <= 2; z++) { // ¡CAMBIADO! de 2..0 a 0..2
+					facelets[idx++] = colorEnumToChar(getCubieAt(0, y, z).getFaceColor(Face::LEFT));
+				}
+			}
+
+			// --- Cara B (Back, z=0) ---
+			// Correcto: Lee B1..B9 (x=2, x=1, x=0)
+			for (int y = 2; y >= 0; y--) {
+				for (int x = 2; x >= 0; x--) {
+					facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 0).getFaceColor(Face::BACK));
+				}
+			}
+
+			facelets[54] = '\0';
+			return std::string(facelets);
+	}
 	
 private:
     std::array<Cubie, 27> m_cubies;
@@ -888,7 +964,12 @@ private:
 	GLuint m_EBO_bordes;
     const float m_spacing = 1.0f;
 
-    int getIndex(int x, int y, int z) const { return x + y * 3 + z * 9; }
+    int getIndex(int x, int y, int z) const { 
+		return x + y * 3 + z * 9; 
+	}
+	Cubie& getCubieAt(int x, int y, int z) {
+		return m_cubies[getIndex(x, y, z)];
+	}
 
     Vec3 getVec3FromColor(Color color) {
         switch (color) {
@@ -904,12 +985,50 @@ private:
     }
 };
 
+
+
+// ----SOLVER---
+void resolverCubo(RubiksCube* g_rubiksCube) {
+    if (!g_animationQueue.empty()) return; // Ya hay una solución en cola
+    //if (g_rubiksCube->m_animator.m_isAnimating) return; // Espera a que termine el movimiento actual
+
+    // 1. TRADUCIR
+    std::string s = g_rubiksCube->getFaceletString();
+	std::cout << "Facelets: " << s << std::endl;
+
+	char facelets_cstr[55];
+	snprintf(facelets_cstr, sizeof(facelets_cstr), "%s", s.c_str());
+
+
+    // 2. RESOLVER
+    // (Asegúrate de que la ruta "kociemba/cprunetables" sea correcta desde donde ejecutas el .exe)
+	char* sol = solution(facelets_cstr, 21, 45000, 0, "kociemba/cprunetables");
+
+    if (sol && strncmp(sol, "Error", 5) != 0) {
+        std::cout << "Solución encontrada: " << sol << std::endl;
+        
+        // 3. PARSEAR Y ENCOLAR
+        std::stringstream ss(sol);
+		//std::cout <<"s: " << ss << std::endl;
+        std::string move;
+        while (ss >> move) { // Lee la solución palabra por palabra (ej. "R", "U2", "F'")
+            g_animationQueue.push(move);
+        }
+    } else {
+        std::cout << "Error del solver: " << (sol ? sol : "Desconocido") << std::endl;
+    }
+
+    if (sol) {
+        free(sol); // ¡MUY IMPORTANTE! Libera la memoria que el C asignó.
+    }
+}
 //-------------------variables globales-----------------------
 RubiksCube* g_rubiksCube = nullptr;
 bool keyProcessed[348] = {false};
 Vec3 g_cameraPos(0.0f, 0.0f, 5.0f);
 
 enum class ActiveFace { FRONT = 1, BACK, LEFT, RIGHT, UP, DOWN };
+
 ActiveFace g_activeFace = ActiveFace::FRONT;
 
 bool adjustClockwiseForView(Axis axis, int slice, bool clockwise, ActiveFace view) {
@@ -1009,6 +1128,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     float cameraSpeed = 0.1f;
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         switch (key) {
+			
+			case GLFW_KEY_F: std::cout <<g_rubiksCube->getFaceletString()<< std::endl; break;
+			case GLFW_KEY_X: resolverCubo(g_rubiksCube); break;
+
             case GLFW_KEY_W: g_cameraPos.z -= cameraSpeed; break;
             case GLFW_KEY_S: g_cameraPos.z += cameraSpeed; break;
             case GLFW_KEY_LEFT: g_cameraPos.x -= cameraSpeed; break;
