@@ -16,7 +16,7 @@
 #include <sstream>
 #include <fstream>
 #include <cstddef>      
-
+#include <algorithm>
 // --- CONFIGURACIÓN ---
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
@@ -79,6 +79,7 @@ const char* fragmentShaderSource = R"glsl(
 
 enum class Color { WHITE, YELLOW, RED, ORANGE, GREEN, BLUE, BLACK };
 enum class Face { UP, DOWN, LEFT, RIGHT, FRONT, BACK };
+enum class Axis { X, Y, Z };
 //using FaceColors = std::map<Face, Color>;
 
 bool g_counterClockwise = false;
@@ -199,12 +200,101 @@ private:
     std::map<Face, Color> m_faces;
 };
 
-//
-// CLASE RUBIKSCUBE
-//
+// CLASE ROTATIONGROUP
+class RotationGroup {
+public:
+    bool     m_isAnimating = false;
+    float    m_currentAngle = 0.0f;
+    float    m_targetAngle = 0.0f;
+    float    m_animationSpeed = 4.0f; // Velocidad (4 radianes/segundo)
+   
+    // Array de punteros a los cubies que se mueven (Tu idea)
+    std::vector<Cubie*> m_cubiesToAnimate; 
+   
+    Axis     m_axis;
+    int      m_slice;
+    bool     m_clockwise;
+
+public:
+    void start(std::vector<Cubie*>& cubies, Axis axis, int slice, bool clockwise) {
+        if (m_isAnimating) return;
+
+        m_isAnimating = true;
+        m_currentAngle = 0.0f;
+        m_targetAngle = clockwise ? (M_PI / 2.0f) : (-M_PI / 2.0f); // +/- 90 grados
+       
+        m_cubiesToAnimate = cubies;
+        m_axis = axis;
+        m_slice = slice;
+        m_clockwise = clockwise;
+    }
+
+    bool update(float deltaTime) {
+        if (!m_isAnimating) return false;
+
+
+        float direction = (m_targetAngle > 0) ? 1.0f : -1.0f;
+        float angle_to_rotate = direction * m_animationSpeed * deltaTime;
+       
+        if ( (m_targetAngle > 0 && m_currentAngle + angle_to_rotate >= m_targetAngle) ||
+             (m_targetAngle < 0 && m_currentAngle + angle_to_rotate <= m_targetAngle) ) 
+        {
+            angle_to_rotate = m_targetAngle - m_currentAngle; 
+
+            m_currentAngle = m_targetAngle;
+            m_isAnimating = false;
+            
+            // Aplicar la rotaciÃ³n final a las matrices
+            applyAnimationToCubies(angle_to_rotate);
+            return true; 
+        }
+       
+        m_currentAngle += angle_to_rotate;
+        // Aplicar la rotaciÃ³n incremental
+        applyAnimationToCubies(angle_to_rotate);
+        
+        return false;
+    }
+
+    // Nueva funciÃ³n para aplicar la rotaciÃ³n incremental
+    void applyAnimationToCubies(float angle_step) {
+        float incrementalRotation[16];
+        identity(incrementalRotation);
+        if (m_axis == Axis::X) rotateX(incrementalRotation, angle_step);
+        else if (m_axis == Axis::Y) rotateY(incrementalRotation, angle_step);
+        else if (m_axis == Axis::Z) rotateZ(incrementalRotation, angle_step);
+
+        for (Cubie* cubie : m_cubiesToAnimate) {
+            float tempModel[16];
+            
+            // Multiplicamos T * R 
+            multiply(tempModel, cubie->modelMatrix, incrementalRotation);
+            
+            for(int k=0; k<16; ++k) cubie->modelMatrix[k] = tempModel[k];
+        }
+    }
+
+    // Esta funciÃ³n ahora solo se usa para la lÃ³gica de finalizaciÃ³n
+    void getFinalRotationMatrix(float M[16]) {
+        identity(M);
+        if (m_axis == Axis::X) rotateX(M, m_targetAngle);
+        else if (m_axis == Axis::Y) rotateY(M, m_targetAngle);
+        else if (m_axis == Axis::Z) rotateZ(M, m_targetAngle);
+    }
+   
+    bool isCubieInGroup(Cubie* c) {
+        if (!m_isAnimating) return false;
+        return std::find(m_cubiesToAnimate.begin(), m_cubiesToAnimate.end(), c) != m_cubiesToAnimate.end();
+    }
+};
+
+//--------------------------------CLASE RUBIKSCUBE-----------------------------------
+
 	
 class RubiksCube {
 public:
+	RotationGroup m_animator;
+
     RubiksCube() {
         for (int z = 0; z <= 2; z++) { 
 			for (int y = 0; y <= 2; y++) { 
@@ -313,6 +403,21 @@ public:
 
         for (int i = 0; i < 27; i++){
             Cubie& cubie = m_cubies[i];
+			
+			// --- 1. Calcular modelMatrix final (con animación si aplica) ---
+			float finalModel[16];
+			for (int k = 0; k < 16; ++k)
+				finalModel[k] = cubie.modelMatrix[k];
+
+			if (m_animator.isCubieInGroup(&cubie)) {
+				float R[16];
+				m_animator.getFinalRotationMatrix(R);
+				float temp[16];
+				multiply(temp, finalModel, R);
+				for (int k = 0; k < 16; ++k)
+					finalModel[k] = temp[k];
+			}
+
 			// Enviamos la matriz model de cada cubie
             shader.setMat4("model", cubie.modelMatrix);
 			// Enviamos los colores del cubie al shader
@@ -336,6 +441,52 @@ public:
         }
         glBindVertexArray(0);
     }
+	
+	void update(float deltaTime) {
+		if (m_animator.update(deltaTime)) {
+			// Cuando termina la animación, aplicar la rotación lógica
+			switch (m_animator.m_axis) {
+				case Axis::X:
+					if (m_animator.m_slice == 0) rotateLeftLayerClockwise();
+					else if (m_animator.m_slice == 1) rotateMiddleVerticalClockwise();
+					else if (m_animator.m_slice == 2) rotateRightLayerClockwise();
+					break;
+				case Axis::Y:
+					if (m_animator.m_slice == 0) rotateDownLayerClockwise();
+					else if (m_animator.m_slice == 1) rotateMiddleLayerClockwise();
+					else if (m_animator.m_slice == 2) rotateUpLayerClockwise();
+					break;
+				case Axis::Z:
+					if (m_animator.m_slice == 0) rotateBackLayerClockwise();
+					else if (m_animator.m_slice == 1) rotateMiddleDepthClockwise();
+					else if (m_animator.m_slice == 2) rotateFrontLayerClockwise();
+					break;
+			}
+		}
+	}
+	
+	void startRotation(Axis axis, int slice, bool clockwise) {
+		if (m_animator.m_isAnimating) return;
+
+		// Invertir sentido si es capa opuesta
+		if (axis == Axis::X && slice == 0) clockwise = !clockwise;
+		if (axis == Axis::Y && slice == 0) clockwise = !clockwise;
+		if (axis == Axis::Z && slice == 0) clockwise = !clockwise;
+
+		std::vector<Cubie*> group;
+		for (int i = 0; i < 27; ++i) {
+			int x = (i % 3);
+			int y = (i / 3) % 3;
+			int z = (i / 9);
+			if ((axis == Axis::X && x == slice) ||
+				(axis == Axis::Y && y == slice) ||
+				(axis == Axis::Z && z == slice)) {
+				group.push_back(&m_cubies[i]);
+			}
+		}
+
+		m_animator.start(group, axis, slice, clockwise);
+	}
 
 	// Rotar la capa UP (y == 2) 90° clockwise visto desde arriba
 	void rotateUpLayerClockwise() {
@@ -686,6 +837,7 @@ public:
 			}
 	}
 	
+	
 private:
     std::array<Cubie, 27> m_cubies;
     GLuint m_VAO, m_VBO;
@@ -717,72 +869,94 @@ Vec3 g_cameraPos(0.0f, 0.0f, 5.0f);
 enum class ActiveFace { FRONT = 1, BACK, LEFT, RIGHT, UP, DOWN };
 ActiveFace g_activeFace = ActiveFace::FRONT;
 
+bool adjustClockwiseForView(Axis axis, int slice, bool clockwise, ActiveFace view) {
+    bool visualClockwise = clockwise;
+
+    switch (axis) {
+        case Axis::X:
+            if (view == ActiveFace::LEFT) visualClockwise = !clockwise;
+            break;
+        case Axis::Y:
+            if (view == ActiveFace::FRONT || view == ActiveFace::RIGHT || view == ActiveFace::LEFT)
+                visualClockwise = !clockwise;
+            break;
+        case Axis::Z:
+            if (view == ActiveFace::BACK || view == ActiveFace::UP || view == ActiveFace::LEFT)
+                visualClockwise = !clockwise;
+            break;
+    }
+
+    if (slice == 0) visualClockwise = !visualClockwise;
+
+    return visualClockwise;
+}
+
 void rotateFromActiveFace(int key) {
     if (!g_rubiksCube) return;
 
+    bool userClockwise = !g_counterClockwise;
+
+    auto rot = [&](Axis axis, int slice) {
+        bool adjusted = adjustClockwiseForView(axis, slice, userClockwise, g_activeFace);
+        g_rubiksCube->startRotation(axis, slice, adjusted);
+    };
+
     switch (g_activeFace) {
-        // ================= FRONT =================
         case ActiveFace::FRONT:
-            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
-            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
-            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
-            if (key == GLFW_KEY_L) g_rubiksCube->rotateLeftLayerClockwise();
-            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
-            if (key == GLFW_KEY_R) g_rubiksCube->rotateRightLayerClockwise();
+            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
+            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
+            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
+            if (key == GLFW_KEY_L) rot(Axis::X, 0);
+            if (key == GLFW_KEY_V) rot(Axis::X, 1);
+            if (key == GLFW_KEY_R) rot(Axis::X, 2);
             break;
 
-        // ================= BACK =================
         case ActiveFace::BACK:
-            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
-            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
-            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
-            if (key == GLFW_KEY_L) g_rubiksCube->rotateRightLayerClockwise();   // invertido
-            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
-            if (key == GLFW_KEY_R) g_rubiksCube->rotateLeftLayerClockwise();    // invertido
+            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
+            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
+            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
+            if (key == GLFW_KEY_L) rot(Axis::X, 2);
+            if (key == GLFW_KEY_V) rot(Axis::X, 1);
+            if (key == GLFW_KEY_R) rot(Axis::X, 0);
             break;
 
-        // ================= LEFT =================
         case ActiveFace::LEFT:
-            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
-            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
-            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
-            if (key == GLFW_KEY_L) g_rubiksCube->rotateBackLayerClockwise();    // izquierda se convierte en back
-            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleDepthClockwise();
-            if (key == GLFW_KEY_R) g_rubiksCube->rotateFrontLayerClockwise();   // derecha se convierte en front
+            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
+            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
+            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
+            if (key == GLFW_KEY_L) rot(Axis::Z, 0);
+            if (key == GLFW_KEY_V) rot(Axis::Z, 1);
+            if (key == GLFW_KEY_R) rot(Axis::Z, 2);
             break;
 
-        // ================= RIGHT =================
         case ActiveFace::RIGHT:
-            if (key == GLFW_KEY_U) g_rubiksCube->rotateUpLayerClockwise();
-            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleLayerClockwise();
-            if (key == GLFW_KEY_D) g_rubiksCube->rotateDownLayerClockwise();
-            if (key == GLFW_KEY_L) g_rubiksCube->rotateFrontLayerClockwise();   // izquierda es front
-            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleDepthClockwise();
-            if (key == GLFW_KEY_R) g_rubiksCube->rotateBackLayerClockwise();    // derecha es back
+            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
+            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
+            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
+            if (key == GLFW_KEY_L) rot(Axis::Z, 2);
+            if (key == GLFW_KEY_V) rot(Axis::Z, 1);
+            if (key == GLFW_KEY_R) rot(Axis::Z, 0);
             break;
 
-        // ================= UP =================
         case ActiveFace::UP:
-            if (key == GLFW_KEY_U) g_rubiksCube->rotateBackLayerClockwise();    // arriba mira hacia back
-            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleDepthClockwise();
-            if (key == GLFW_KEY_D) g_rubiksCube->rotateFrontLayerClockwise();   // abajo mira hacia front
-            if (key == GLFW_KEY_L) g_rubiksCube->rotateLeftLayerClockwise();
-            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
-            if (key == GLFW_KEY_R) g_rubiksCube->rotateRightLayerClockwise();
+            if (key == GLFW_KEY_U) rot(Axis::Z, 0);
+            if (key == GLFW_KEY_M) rot(Axis::Z, 1);
+            if (key == GLFW_KEY_D) rot(Axis::Z, 2);
+            if (key == GLFW_KEY_L) rot(Axis::X, 0);
+            if (key == GLFW_KEY_V) rot(Axis::X, 1);
+            if (key == GLFW_KEY_R) rot(Axis::X, 2);
             break;
 
-        // ================= DOWN =================
         case ActiveFace::DOWN:
-            if (key == GLFW_KEY_U) g_rubiksCube->rotateFrontLayerClockwise();   // arriba mira hacia front
-            if (key == GLFW_KEY_M) g_rubiksCube->rotateMiddleDepthClockwise();
-            if (key == GLFW_KEY_D) g_rubiksCube->rotateBackLayerClockwise();    // abajo mira hacia back
-            if (key == GLFW_KEY_L) g_rubiksCube->rotateLeftLayerClockwise();
-            if (key == GLFW_KEY_V) g_rubiksCube->rotateMiddleVerticalClockwise();
-            if (key == GLFW_KEY_R) g_rubiksCube->rotateRightLayerClockwise();
+            if (key == GLFW_KEY_U) rot(Axis::Z, 2);
+            if (key == GLFW_KEY_M) rot(Axis::Z, 1);
+            if (key == GLFW_KEY_D) rot(Axis::Z, 0);
+            if (key == GLFW_KEY_L) rot(Axis::X, 0);
+            if (key == GLFW_KEY_V) rot(Axis::X, 1);
+            if (key == GLFW_KEY_R) rot(Axis::X, 2);
             break;
     }
 }
-
 //--------------------CALLBACKS ------------------------------
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -870,8 +1044,14 @@ int main() {
     rubiksCube.setupMesh();
     g_rubiksCube = &rubiksCube;
 
+	double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
+		// --- Calculo de DeltaTime ---
+        double currentTime = glfwGetTime();
+        float deltaTime = (float)(currentTime - lastTime);
+        lastTime = currentTime;
+		
         glClearColor(0.8f, 0.8f, 0.8f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -882,6 +1062,9 @@ int main() {
 
         Mat4 view = lookAt(eye, center, up);
         Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+		
+		rubiksCube.update(deltaTime);
+		
         cubieShader.use();       
 		cubieShader.setMat4("projection", proj.m);
         cubieShader.setMat4("view", view.m);
