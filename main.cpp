@@ -30,44 +30,73 @@ const unsigned int SCR_HEIGHT = 600;
 const char* vertexShaderSource = R"glsl(
     #version 330 core
     layout (location = 0) in vec3 aPos;
+	layout (location = 1) in vec3 anormal;
     layout (location = 2) in int aFaceID;
 
-    flat out int v_FaceID; 
     uniform mat4 model;
     uniform mat4 view;
     uniform mat4 projection;
 
+    out vec3 v_FragPos;
+    out vec3 v_Normal;
+    flat out int v_FaceID;
+
     void main() {
+        // Posición transformada
         gl_Position = projection * view * model * vec4(aPos, 1.0);
+        v_FragPos = vec3(model * vec4(aPos, 1.0));
+
+        // Transformar normal con la matriz del modelo
+        mat3 normalMatrix = mat3(transpose(inverse(model)));
+        v_Normal = normalize(normalMatrix * anormal);
         v_FaceID = aFaceID;
     }
 )glsl";
 
-// Fragment Shader
+
 const char* fragmentShaderSource = R"glsl(
     #version 330 core
     out vec4 FragColor;
 
     flat in int v_FaceID;
-    uniform vec3 u_faceColors[6]; // [R, L, U, D, F, B]
-	uniform float u_isBorder;
+    in vec3 v_Normal;
+    in vec3 v_FragPos;
+
+    uniform vec3 u_faceColors[6];
+    uniform float u_isBorder;
+
+    // --- Iluminación ---
+    uniform vec3 u_lightPos;
+    uniform vec3 u_viewPos;
+    uniform vec3 u_lightColor;
+    uniform float u_ambientStrength;
+    uniform float u_specularStrength;
 
     void main() {
-		if (u_isBorder > 0.5) {
-            // PASE 2: Estamos dibujando el borde, forzar a negro.
+        if (u_isBorder > 0.5) {
             FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-			
-        } else {
-            // PASE 1: Estamos dibujando el relleno, usar el color de la cara.
-            vec3 objectColor = u_faceColors[v_FaceID];
-            
-            // Si el fondo es negro (caras internas), píntalo de un gris oscuro.
-            if (objectColor == vec3(0.0, 0.0, 0.0)) {
-                 FragColor = vec4(0.05, 0.05, 0.05, 1.0); // Plástico base
-            } else {
-                 FragColor = vec4(objectColor, 1.0);
-			}
-		}
+            return;
+        }
+
+        vec3 objectColor = u_faceColors[v_FaceID];
+        if (objectColor == vec3(0.0)) objectColor = vec3(0.05);
+
+        // vectores principales
+        vec3 norm = normalize(v_Normal);
+        vec3 lightDir = normalize(u_lightPos - v_FragPos);
+        vec3 viewDir  = normalize(u_viewPos - v_FragPos);
+        vec3 reflectDir = reflect(-lightDir, norm);
+
+        // componentes
+        float diff = max(dot(norm, lightDir), 0.0);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 256.0);
+
+        vec3 ambient = u_ambientStrength * u_lightColor;
+        vec3 diffuse = diff * u_lightColor;
+        vec3 specular = u_specularStrength * spec * u_lightColor;
+
+        vec3 result = (ambient + diffuse + specular) * objectColor;
+        FragColor = vec4(result, 1.0);
     }
 )glsl";
 
@@ -328,23 +357,35 @@ public:
         float s = 0.5f;
 		class Vertex { 
 		public:
-			Vec3 pos; 
+			Vec3 pos;
+			Vec3 normal;
 			GLint faceID; 
 		};
-        std::vector<Vertex> vertices = {
-            {{s, s, s}, 0}, {{s,-s, s}, 0}, {{s,-s,-s}, 0}, //Right Face
-            {{s,-s,-s}, 0}, {{s, s,-s}, 0}, {{s, s, s}, 0},
-            {{-s, s, s}, 1}, {{-s,-s,-s}, 1}, {{-s,-s, s}, 1}, //Left Face
-            {{-s,-s,-s}, 1}, {{-s, s, s}, 1}, {{-s, s,-s}, 1},
-            {{-s, s,-s}, 2}, {{s, s, s}, 2}, {{s, s,-s}, 2}, //Up Face
-            {{s, s, s}, 2}, {{-s, s,-s}, 2}, {{-s, s, s}, 2},
-            {{-s,-s,-s}, 3}, {{s,-s,-s}, 3}, {{s,-s, s}, 3}, //Down Face
-            {{s,-s, s}, 3}, {{-s,-s, s}, 3}, {{-s,-s,-s}, 3},
-            {{-s,-s, s}, 4}, {{s,-s, s}, 4}, {{s, s, s}, 4}, //Front Face 
-            {{s, s, s}, 4}, {{-s, s, s}, 4}, {{-s,-s, s}, 4},
-            {{-s,-s,-s}, 5}, {{-s, s,-s}, 5}, {{s, s,-s}, 5},// Back Face 
-            {{s, s,-s}, 5}, {{s,-s,-s}, 5}, {{-s,-s,-s}, 5}
-        };
+		std::vector<Vertex> vertices = {
+			// Cara DERECHA (+X)
+			{{s, s, s},     {1, 0, 0}, 0}, {{s,-s, s},     {1, 0, 0}, 0}, {{s,-s,-s},    {1, 0, 0}, 0},
+			{{s,-s,-s},    {1, 0, 0}, 0}, {{s, s,-s},     {1, 0, 0}, 0}, {{s, s, s},     {1, 0, 0}, 0},
+
+			// Cara IZQUIERDA (-X)
+			{{-s, s, s},   {-1, 0, 0}, 1}, {{-s,-s,-s},   {-1, 0, 0}, 1}, {{-s,-s, s},   {-1, 0, 0}, 1},
+			{{-s,-s,-s},   {-1, 0, 0}, 1}, {{-s, s, s},   {-1, 0, 0}, 1}, {{-s, s,-s},   {-1, 0, 0}, 1},
+
+			// Cara SUPERIOR (+Y)
+			{{-s, s,-s},   {0, 1, 0}, 2}, {{s, s, s},     {0, 1, 0}, 2}, {{s, s,-s},     {0, 1, 0}, 2},
+			{{s, s, s},     {0, 1, 0}, 2}, {{-s, s,-s},   {0, 1, 0}, 2}, {{-s, s, s},    {0, 1, 0}, 2},
+
+			// Cara INFERIOR (-Y)
+			{{-s,-s,-s},   {0,-1, 0}, 3}, {{s,-s,-s},     {0,-1, 0}, 3}, {{s,-s, s},     {0,-1, 0}, 3},
+			{{s,-s, s},     {0,-1, 0}, 3}, {{-s,-s, s},   {0,-1, 0}, 3}, {{-s,-s,-s},   {0,-1, 0}, 3},
+
+			// Cara FRONTAL (+Z)
+			{{-s,-s, s},   {0, 0, 1}, 4}, {{s,-s, s},     {0, 0, 1}, 4}, {{s, s, s},     {0, 0, 1}, 4},
+			{{s, s, s},     {0, 0, 1}, 4}, {{-s, s, s},   {0, 0, 1}, 4}, {{-s,-s, s},   {0, 0, 1}, 4},
+
+			// Cara TRASERA (-Z)
+			{{-s,-s,-s},   {0, 0,-1}, 5}, {{-s, s,-s},    {0, 0,-1}, 5}, {{s, s,-s},     {0, 0,-1}, 5},
+			{{s, s,-s},     {0, 0,-1}, 5}, {{s,-s,-s},    {0, 0,-1}, 5}, {{-s,-s,-s},   {0, 0,-1}, 5}
+		};
 		
 		const unsigned int INDICES_RELLENO[36] = {
 			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 
@@ -390,6 +431,8 @@ public:
         GLsizei stride = sizeof(Vertex);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, pos));
         glEnableVertexAttribArray(0);
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, normal));
+		glEnableVertexAttribArray(1);
         glVertexAttribIPointer(2, 1, GL_INT, stride, (void*)offsetof(Vertex, faceID));
         glEnableVertexAttribArray(2);
         glBindVertexArray(0);
@@ -1045,6 +1088,11 @@ int main() {
     g_rubiksCube = &rubiksCube;
 
 	double lastTime = glfwGetTime();
+	cubieShader.use();
+	cubieShader.setVec3("u_lightPos", Vec3(0.0f, 0.75f, 5.0f));  // posicion de luz
+	cubieShader.setVec3("u_lightColor", Vec3(1.0f, 1.0f, 1.0f)); // luz blanca
+	cubieShader.setFloat("u_ambientStrength", 0.4f);
+	cubieShader.setFloat("u_specularStrength", 10.1f);
 
     while (!glfwWindowShouldClose(window)) {
 		// --- Calculo de DeltaTime ---
@@ -1068,6 +1116,9 @@ int main() {
         cubieShader.use();       
 		cubieShader.setMat4("projection", proj.m);
         cubieShader.setMat4("view", view.m);
+
+		cubieShader.setVec3("u_viewPos", g_cameraPos);
+		
         rubiksCube.draw(cubieShader);
 
         glfwSwapBuffers(window);
