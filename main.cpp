@@ -25,7 +25,7 @@ extern "C" {
 #include <string>
 #include <sstream>
 
-std::queue<std::string> g_animationQueue;
+std::deque<std::string> g_animationQueue;
 
 // --- CONFIGURACIÓN ---
 const unsigned int SCR_WIDTH = 800;
@@ -105,7 +105,10 @@ const char* fragmentShaderSource = R"glsl(
         vec3 diffuse = diff * u_lightColor;
         vec3 specular = u_specularStrength * spec * u_lightColor;
 
-        vec3 result = (ambient + diffuse + specular) * objectColor;
+        // vec3 result = (ambient + diffuse + specular) * objectColor;
+		vec3 ambient_diffuse_part = (ambient + diffuse) * objectColor;
+		vec3 result = ambient_diffuse_part + specular; // 
+
         FragColor = vec4(result, 1.0);
     }
 )glsl";
@@ -485,6 +488,7 @@ public:
 
 			// Enviamos la matriz model de cada cubie
             shader.setMat4("model", cubie.modelMatrix);
+			//shader.setMat4("model", finalModel);
 			// Enviamos los colores del cubie al shader
             faceColors[0] = getVec3FromColor(cubie.getFaceColor(Face::RIGHT));
             faceColors[1] = getVec3FromColor(cubie.getFaceColor(Face::LEFT));
@@ -905,11 +909,24 @@ public:
 		char facelets[55]; // 54 + 1 para el '\0'
 			int idx = 0;
 
+
+			// PRIMERO: Determinar el mapeo dinámico basado en los centros
+			std::map<Color, char> colorToChar;
+			
+			// Los centros definen la correspondencia
+			colorToChar[getCubieAt(1, 2, 1).getFaceColor(Face::UP)]    = 'U';  // Centro U
+			colorToChar[getCubieAt(1, 0, 1).getFaceColor(Face::DOWN)]  = 'D';  // Centro D  
+			colorToChar[getCubieAt(1, 1, 2).getFaceColor(Face::FRONT)] = 'F';  // Centro F
+			colorToChar[getCubieAt(1, 1, 0).getFaceColor(Face::BACK)]  = 'B';  // Centro B
+			colorToChar[getCubieAt(0, 1, 1).getFaceColor(Face::LEFT)]  = 'L';  // Centro L
+			colorToChar[getCubieAt(2, 1, 1).getFaceColor(Face::RIGHT)] = 'R';  // Centro R
 			// --- Cara U (Up, y=2) ---
 			// Correcto: Lee U1..U9 (z=0, z=1, z=2)
 			for (int z = 0; z <= 2; z++) { // z=0 (Back), z=1, z=2 (Front)
 				for (int x = 0; x <= 2; x++) { // x=0 (Left), x=1, x=2 (Right)
-					facelets[idx++] = colorEnumToChar(getCubieAt(x, 2, z).getFaceColor(Face::UP));
+					//facelets[idx++] = colorEnumToChar(getCubieAt(x, 2, z).getFaceColor(Face::UP));
+					facelets[idx++] = colorToChar[getCubieAt(x, 2, z).getFaceColor(Face::UP)];
+
 				}
 			}
 
@@ -917,7 +934,8 @@ public:
 			// CORREGIDO: Lee R1..R9 (z=2, z=1, z=0)
 			for (int y = 2; y >= 0; y--) { 
 				for (int z = 2; z >= 0; z--) { // ¡CAMBIADO! de 0..2 a 2..0
-					facelets[idx++] = colorEnumToChar(getCubieAt(2, y, z).getFaceColor(Face::RIGHT));
+					//facelets[idx++] = colorEnumToChar(getCubieAt(2, y, z).getFaceColor(Face::RIGHT));
+					facelets[idx++] = colorToChar[getCubieAt(2, y, z).getFaceColor(Face::RIGHT)];
 				}
 			}
 
@@ -925,7 +943,8 @@ public:
 			// Correcto: Lee F1..F9 (y=2, y=1, y=0)
 			for (int y = 2; y >= 0; y--) {
 				for (int x = 0; x <= 2; x++) {
-					facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 2).getFaceColor(Face::FRONT));
+					//facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 2).getFaceColor(Face::FRONT));
+					facelets[idx++] = colorToChar[getCubieAt(x, y, 2).getFaceColor(Face::FRONT)];
 				}
 			}
 
@@ -933,7 +952,8 @@ public:
 			// Correcto: Lee D1..D9 (z=2, z=1, z=0)
 			for (int z = 2; z >= 0; z--) {
 				for (int x = 0; x <= 2; x++) {
-					facelets[idx++] = colorEnumToChar(getCubieAt(x, 0, z).getFaceColor(Face::DOWN));
+					//facelets[idx++] = colorEnumToChar(getCubieAt(x, 0, z).getFaceColor(Face::DOWN));
+					facelets[idx++] = colorToChar[getCubieAt(x, 0, z).getFaceColor(Face::DOWN)];
 				}
 			}
 
@@ -941,7 +961,8 @@ public:
 			// CORREGIDO: Lee L1..L9 (z=0, z=1, z=2)
 			for (int y = 2; y >= 0; y--) {
 				for (int z = 0; z <= 2; z++) { // ¡CAMBIADO! de 2..0 a 0..2
-					facelets[idx++] = colorEnumToChar(getCubieAt(0, y, z).getFaceColor(Face::LEFT));
+					//facelets[idx++] = colorEnumToChar(getCubieAt(0, y, z).getFaceColor(Face::LEFT));
+					facelets[idx++] = colorToChar[getCubieAt(0, y, z).getFaceColor(Face::LEFT)];
 				}
 			}
 
@@ -949,7 +970,9 @@ public:
 			// Correcto: Lee B1..B9 (x=2, x=1, x=0)
 			for (int y = 2; y >= 0; y--) {
 				for (int x = 2; x >= 0; x--) {
-					facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 0).getFaceColor(Face::BACK));
+					//facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 0).getFaceColor(Face::BACK));
+					facelets[idx++] = colorToChar[getCubieAt(x, y, 0).getFaceColor(Face::BACK)];
+
 				}
 			}
 
@@ -1005,14 +1028,14 @@ void resolverCubo(RubiksCube* g_rubiksCube) {
 	char* sol = solution(facelets_cstr, 21, 45000, 0, "kociemba/cprunetables");
 
     if (sol && strncmp(sol, "Error", 5) != 0) {
-        std::cout << "Solución encontrada: " << sol << std::endl;
+        std::cout << "Solucion encontrada: " << sol << std::endl;
         
         // 3. PARSEAR Y ENCOLAR
         std::stringstream ss(sol);
 		//std::cout <<"s: " << ss << std::endl;
         std::string move;
         while (ss >> move) { // Lee la solución palabra por palabra (ej. "R", "U2", "F'")
-            g_animationQueue.push(move);
+            g_animationQueue.push_back(move);
         }
     } else {
         std::cout << "Error del solver: " << (sol ? sol : "Desconocido") << std::endl;
@@ -1040,10 +1063,6 @@ bool adjustClockwiseForView(Axis axis, int slice, bool clockwise, ActiveFace vie
             break;
         case Axis::Y:
             if (view == ActiveFace::FRONT || view == ActiveFace::RIGHT || view == ActiveFace::LEFT)
-                visualClockwise = !clockwise;
-            break;
-        case Axis::Z:
-            if (view == ActiveFace::BACK || view == ActiveFace::UP || view == ActiveFace::LEFT)
                 visualClockwise = !clockwise;
             break;
     }
@@ -1119,6 +1138,106 @@ void rotateFromActiveFace(int key) {
             break;
     }
 }
+
+std::vector<std::string> expandMove(const std::string& mov) {
+    std::vector<std::string> out;
+
+    if (mov.size() == 2 && mov[1] == '2') {
+        out.push_back(std::string(1, mov[0]));
+        out.push_back(std::string(1, mov[0]));   // ← dos veces
+    }
+    else {
+        out.push_back(mov);
+    }
+
+    return out;
+}
+
+void applyMoveAsKeyCallback(const std::string& mov) {
+
+    char m = mov[0];
+    bool prime = (mov.size() == 2 && mov[1] == '\'');
+
+    switch (m) {
+
+        case 'U':
+            g_activeFace = ActiveFace::FRONT;
+            g_counterClockwise = !prime;
+            rotateFromActiveFace(GLFW_KEY_U);
+            break;
+
+        case 'D':
+            g_activeFace = ActiveFace::FRONT;
+            g_counterClockwise = prime;
+            rotateFromActiveFace(GLFW_KEY_D);
+            break;
+
+        case 'L':
+            g_activeFace = ActiveFace::FRONT;
+            g_counterClockwise = !prime;
+            rotateFromActiveFace(GLFW_KEY_L);
+            break;
+
+        case 'R':
+            g_activeFace = ActiveFace::FRONT;
+            g_counterClockwise = prime;
+            rotateFromActiveFace(GLFW_KEY_R);
+            break;
+
+        case 'F':
+            g_activeFace = ActiveFace::UP;
+            g_counterClockwise = prime;
+            rotateFromActiveFace(GLFW_KEY_D);
+            break;
+
+        case 'B':
+            g_activeFace = ActiveFace::UP;
+            g_counterClockwise = !prime;
+            rotateFromActiveFace(GLFW_KEY_U);
+            break;
+    }
+}
+
+
+
+void processAnimationQueue() {
+
+    if (!g_rubiksCube) return;
+
+    // si está animando, NO avanzar
+    if (g_rubiksCube->m_animator.m_isAnimating)
+        return;
+
+    if (g_animationQueue.empty())
+        return;
+
+    // Leo el siguiente movimiento
+    std::string mov = g_animationQueue.front();
+    g_animationQueue.pop_front();
+
+    // Si es movimiento doble → R2, F2, U2...
+    if (mov.size() == 2 && mov[1] == '2') {
+
+        std::string m1(1, mov[0]);
+        std::string m2(1, mov[0]);
+
+        // Primero se ejecuta m1 (ahora)
+        // Y m2 se inserta al frente para que sea el siguiente
+        g_animationQueue.push_front(m2);
+
+        applyMoveAsKeyCallback(m1);
+        return;
+    }
+
+    // Movimiento simple
+    applyMoveAsKeyCallback(mov);
+}
+
+
+
+
+
+
 //--------------------CALLBACKS ------------------------------
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -1163,7 +1282,6 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
             case GLFW_KEY_R:
                 rotateFromActiveFace(key);
                 break;
-
 
         }
     }
@@ -1241,7 +1359,8 @@ int main() {
         cubieShader.setMat4("view", view.m);
 
 		cubieShader.setVec3("u_viewPos", g_cameraPos);
-		
+		processAnimationQueue();
+
         rubiksCube.draw(cubieShader);
 
         glfwSwapBuffers(window);
