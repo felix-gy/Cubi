@@ -1406,8 +1406,8 @@ int main() {
 	std::cout << "\n--- Rotacion de la camara ---\n";
 	std::cout << "  Flecha (up) arriba\n";
 	std::cout << "  Flecha (down) abajo\n";
-	std::cout << "  P --> izquierda (giro horizontal)\n";
-	std::cout << "  I --> derecha (giro horizontal)\n";
+	std::cout << "  I --> izquierda (giro horizontal)\n";
+	std::cout << "  P --> derecha (giro horizontal)\n";
 
 	std::cout << "\n===============================================================\n\n";
 
