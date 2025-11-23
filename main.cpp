@@ -48,7 +48,7 @@ const char* vertexShaderSource = R"glsl(
     uniform mat4 projection;
 
     out vec3 v_FragPos;
-    out vec3 v_Normal;
+    flat out vec3 v_Normal;
     flat out int v_FaceID;
 
     void main() {
@@ -69,7 +69,7 @@ const char* fragmentShaderSource = R"glsl(
     out vec4 FragColor;
 
     flat in int v_FaceID;
-    in vec3 v_Normal;
+    flat in vec3 v_Normal;
     in vec3 v_FragPos;
 
     uniform vec3 u_faceColors[6];
@@ -199,7 +199,7 @@ public:
 		Color oldDown  = m_faces[Face::DOWN];
 		Color oldBack  = m_faces[Face::BACK];
 
-		// UP → BACK → DOWN → FRONT → UP
+		// UP --> BACK --> DOWN --> FRONT --> UP
 		m_faces[Face::BACK]  = oldUp;
 		m_faces[Face::DOWN]  = oldBack;
 		m_faces[Face::FRONT] = oldDown;
@@ -214,7 +214,7 @@ public:
 		Color oldDown  = m_faces[Face::DOWN];
 		Color oldBack  = m_faces[Face::BACK];
 
-		// UP → FRONT → DOWN → BACK → UP
+		// UP --> FRONT --> DOWN --> BACK --> UP
 		m_faces[Face::FRONT] = oldUp;
 		m_faces[Face::DOWN]  = oldFront;
 		m_faces[Face::BACK]  = oldDown;
@@ -498,9 +498,12 @@ public:
             faceColors[5] = getVec3FromColor(cubie.getFaceColor(Face::BACK));
 			shader.setVec3Array("u_faceColors", 6, faceColors);
 			
+			glEnable(GL_POLYGON_OFFSET_FILL);
+			glPolygonOffset(1.0f,1.0f);
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_relleno); 
 			shader.setFloat("u_isBorder", 0.0f);
 			glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+			glDisable(GL_POLYGON_OFFSET_FILL);
 			 
 			glLineWidth(10.0f);
 			shader.setFloat("u_isBorder", 1.0f);
@@ -1139,19 +1142,6 @@ void rotateFromActiveFace(int key) {
     }
 }
 
-std::vector<std::string> expandMove(const std::string& mov) {
-    std::vector<std::string> out;
-
-    if (mov.size() == 2 && mov[1] == '2') {
-        out.push_back(std::string(1, mov[0]));
-        out.push_back(std::string(1, mov[0]));   // ← dos veces
-    }
-    else {
-        out.push_back(mov);
-    }
-
-    return out;
-}
 
 void applyMoveAsKeyCallback(const std::string& mov) {
 
@@ -1215,7 +1205,7 @@ void processAnimationQueue() {
     std::string mov = g_animationQueue.front();
     g_animationQueue.pop_front();
 
-    // Si es movimiento doble → R2, F2, U2...
+    // Si es movimiento doble --> R2, F2, U2...
     if (mov.size() == 2 && mov[1] == '2') {
 
         std::string m1(1, mov[0]);
@@ -1236,6 +1226,10 @@ void processAnimationQueue() {
 
 
 
+	float yaw   = -90.0f;   // mira hacia -Z
+	float pitch = 0.0f;
+	Vec3 cameraFront(0.0f, 0.0f, -1.0f);
+	Vec3 cameraUp(0.0f, 1.0f, 0.0f);
 
 
 //--------------------CALLBACKS ------------------------------
@@ -1251,19 +1245,48 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 			case GLFW_KEY_F: std::cout <<g_rubiksCube->getFaceletString()<< std::endl; break;
 			case GLFW_KEY_X: resolverCubo(g_rubiksCube); break;
 
-            case GLFW_KEY_W: g_cameraPos.z -= cameraSpeed; break;
-            case GLFW_KEY_S: g_cameraPos.z += cameraSpeed; break;
-            case GLFW_KEY_LEFT: g_cameraPos.x -= cameraSpeed; break;
-            case GLFW_KEY_RIGHT: g_cameraPos.x += cameraSpeed; break;
-            case GLFW_KEY_UP: g_cameraPos.y += cameraSpeed; break; // Arriba
-            case GLFW_KEY_DOWN: g_cameraPos.y -= cameraSpeed; break; // Abajo
-			
+            case GLFW_KEY_W:
+				g_cameraPos = g_cameraPos + cameraFront * cameraSpeed;
+				break;
+
+			case GLFW_KEY_S:
+				g_cameraPos = g_cameraPos - cameraFront * cameraSpeed;
+				break;
+
+			case GLFW_KEY_LEFT:
+				g_cameraPos = g_cameraPos - normalize(cross(cameraFront, cameraUp)) * cameraSpeed;
+				break;
+
+			case GLFW_KEY_RIGHT:
+				g_cameraPos = g_cameraPos + normalize(cross(cameraFront, cameraUp)) * cameraSpeed;
+				break;
+
+			// --- Pitch (flecha arriba / abajo) ---
+			case GLFW_KEY_UP:
+				pitch += 2.0f;
+				if (pitch > 89.0f) pitch = 89.0f;
+				break;
+
+			case GLFW_KEY_DOWN:
+				pitch -= 2.0f;
+				if (pitch < -89.0f) pitch = -89.0f;
+				break;
+
+			case GLFW_KEY_P:
+				yaw -= 2.0f;
+				break;
+
+			case GLFW_KEY_I:
+				yaw += 2.0f;
+				break;
+
 			case GLFW_KEY_C:
 				g_counterClockwise = !g_counterClockwise;
 				std::cout << "Modo de rotacion cambiado a: "
 						  << (g_counterClockwise ? "CounterClockwise" : "Clockwise")
 						  << std::endl;
 				break;
+					
 
 			// ---------------- SELECCIÓN DE CARA ACTIVA ----------------
             case GLFW_KEY_1: g_activeFace = ActiveFace::FRONT; std::cout << "Cara activa: FRONT\n"; break;
@@ -1284,6 +1307,18 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
                 break;
 
         }
+		
+		/// Convertir grados a radianes (sin usar radians())
+		float radYaw   = yaw   * 3.1415926535f / 180.0f;
+		float radPitch = pitch * 3.1415926535f / 180.0f;
+
+		// Recalcular la dirección
+		Vec3 dir;
+		dir.x = cos(radYaw) * cos(radPitch);
+		dir.y = sin(radPitch);
+		dir.z = sin(radYaw) * cos(radPitch);
+
+		cameraFront = normalize(dir);
     }
 
     if (action == GLFW_PRESS && !keyProcessed[key]) {
@@ -1334,7 +1369,49 @@ int main() {
 	cubieShader.setVec3("u_lightColor", Vec3(1.0f, 1.0f, 1.0f)); // luz blanca
 	cubieShader.setFloat("u_ambientStrength", 0.4f);
 	cubieShader.setFloat("u_specularStrength", 10.1f);
+	
+	std::cout << "\n\n===================== CONTROLES DEL CUBO =====================\n";
 
+	std::cout << "\n--- SELECCIONAR CARA ACTIVA ---\n";
+	std::cout << "  1 --> FRONT  (frontal)\n";
+	std::cout << "  2 --> BACK   (posterior)\n";
+	std::cout << "  3 --> LEFT   (izquierda)\n";
+	std::cout << "  4 --> RIGHT  (derecha)\n";
+	std::cout << "  5 --> UP     (superior)\n";
+	std::cout << "  6 --> DOWN   (inferior)\n";
+
+	std::cout << "\n--- REALIZAR MOVIMIENTOS DE LA CARA ACTIVA ---\n";
+	std::cout << "  U --> Girar capa superior de la cara activa\n";
+	std::cout << "  M --> Girar capa del medio\n";
+	std::cout << "  D --> Girar capa inferior\n";
+	std::cout << "  L --> Girar capa izquierda\n";
+	std::cout << "  V --> Girar capa central vertical\n";
+	std::cout << "  R --> Girar capa derecha\n";
+
+	std::cout << "\n--- SENTIDO DEL GIRO (Clockwise / CounterClockwise) ---\n";
+	std::cout << "  C --> Alterna entre Clockwise y CounterClockwise\n";
+
+	std::cout << "\n--- USO DEL SOLVER ---\n";
+	std::cout << "  X --> Lanza el solver Kociemba y ejecuta los movimientos\n";
+	std::cout << "  F --> Imprime el facelet string (estado del cubo)\n";
+
+	std::cout << "\n===================== CONTROLES DE LA CAMARA =====================\n";
+
+	std::cout << "\n--- Movimiento FPS ---\n";
+	std::cout << "  W --> Avanza segun la direccion de la camara\n";
+	std::cout << "  S --> Retrocede\n";
+	std::cout << "  Flecha left (<-) izquierda\n";
+	std::cout << "  Flecha right (->) derecha\n";
+
+	std::cout << "\n--- Rotacion de la camara ---\n";
+	std::cout << "  Flecha (up) arriba\n";
+	std::cout << "  Flecha (down) abajo\n";
+	std::cout << "  P --> izquierda (giro horizontal)\n";
+	std::cout << "  I --> derecha (giro horizontal)\n";
+
+	std::cout << "\n===============================================================\n\n";
+
+	
     while (!glfwWindowShouldClose(window)) {
 		// --- Calculo de DeltaTime ---
         double currentTime = glfwGetTime();
@@ -1343,13 +1420,15 @@ int main() {
 		
         glClearColor(0.8f, 0.8f, 0.8f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        Vec3 eye = g_cameraPos;
-        Vec3 center(g_cameraPos.x, g_cameraPos.y, g_cameraPos.z - 1.0f); 
+		
+        //Vec3 eye = g_cameraPos;
+        //Vec3 center(g_cameraPos.x, g_cameraPos.y, g_cameraPos.z - 1.0f); 
   
         Vec3 up(0.0f, 1.0f, 0.0f);
 
-        Mat4 view = lookAt(eye, center, up);
+        //Mat4 view = lookAt(eye, center, up);
+		Mat4 view = lookAt(g_cameraPos, g_cameraPos + cameraFront, cameraUp);
+
         Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
 		
 		rubiksCube.update(deltaTime);
