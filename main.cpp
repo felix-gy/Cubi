@@ -1262,12 +1262,12 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 				break;
 
 			// --- Pitch (flecha arriba / abajo) ---
-			case GLFW_KEY_UP:
+			case GLFW_KEY_DOWN:
 				pitch += 2.0f;
 				if (pitch > 89.0f) pitch = 89.0f;
 				break;
 
-			case GLFW_KEY_DOWN:
+			case GLFW_KEY_UP:
 				pitch -= 2.0f;
 				if (pitch < -89.0f) pitch = -89.0f;
 				break;
