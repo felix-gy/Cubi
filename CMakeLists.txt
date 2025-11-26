@@ -1,4 +1,4 @@
-project( cubiLight_glfw )
+project( CubiAnimation_glfw )
 
 message( "Source of application:  ${CMAKE_SOURCE_DIR} " )
 message( "Subproject name:  ${PROJECT_NAME} " )

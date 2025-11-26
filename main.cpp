@@ -36,33 +36,67 @@ const unsigned int SCR_HEIGHT = 600;
 
 // --- SHADERS (INTERNOS) ---
 
-// Vertex Shader
 const char* vertexShaderSource = R"glsl(
     #version 330 core
     layout (location = 0) in vec3 aPos;
-	layout (location = 1) in vec3 anormal;
+    layout (location = 1) in vec3 anormal;
     layout (location = 2) in int aFaceID;
 
     uniform mat4 model;
     uniform mat4 view;
     uniform mat4 projection;
 
+    // --- VARIABLES NUEVAS ---
+    uniform vec3 uBlackHolePos;
+    uniform float uAbsorbFactor;
+    uniform float uTime;
+    
+    // NUEVO: Desplazamiento global para mover todo el cubo junto
+    uniform vec3 u_worldOffset; 
+
+    // Outputs
     out vec3 v_FragPos;
     flat out vec3 v_Normal;
     flat out int v_FaceID;
 
     void main() {
-        // Posición transformada
-        gl_Position = projection * view * model * vec4(aPos, 1.0);
-        v_FragPos = vec3(model * vec4(aPos, 1.0));
+        // 1. Aplicar el desplazamiento del cubo en el mundo ANTES de la distorsión
+        vec4 basePos = model * vec4(aPos, 1.0);
+        basePos.xyz += u_worldOffset; // <--- AQUÍ MOVEMOS EL CUBO POR EL ESPACIO
 
-        // Transformar normal con la matriz del modelo
+        vec4 worldPosition = basePos;
+        
+        // 2. Lógica de Distorsión (Espaguetización)
+        if (uAbsorbFactor > 0.0) {
+            vec3 direction = uBlackHolePos - worldPosition.xyz;
+            float dist = length(direction);
+            // Estiramiento más agresivo cuanto más cerca
+            float stretch = uAbsorbFactor * (8.0 / (dist + 0.1)); 
+            
+            // Atraer vértices al agujero
+            worldPosition.xyz += direction * clamp(stretch * 0.15, 0.0, 1.0);
+            
+            // Remolino caótico
+            float angle = stretch * 3.0 * sin(uTime * 5.0);
+            float s = sin(angle);
+            float c = cos(angle);
+            // Rotación simple en X/Z para el remolino
+             float nx = worldPosition.x * c - worldPosition.z * s;
+             float nz = worldPosition.x * s + worldPosition.z * c;
+             worldPosition.x = nx;
+             worldPosition.z = nz;
+        }
+
+        v_FragPos = worldPosition.xyz;
+        
+        // Normales (simplificado para distorsión)
         mat3 normalMatrix = mat3(transpose(inverse(model)));
         v_Normal = normalize(normalMatrix * anormal);
         v_FaceID = aFaceID;
+
+        gl_Position = projection * view * worldPosition;
     }
 )glsl";
-
 
 const char* fragmentShaderSource = R"glsl(
     #version 330 core
@@ -72,47 +106,131 @@ const char* fragmentShaderSource = R"glsl(
     flat in vec3 v_Normal;
     in vec3 v_FragPos;
 
+    // --- Uniforms Originales ---
     uniform vec3 u_faceColors[6];
     uniform float u_isBorder;
-
-    // --- Iluminación ---
     uniform vec3 u_lightPos;
     uniform vec3 u_viewPos;
     uniform vec3 u_lightColor;
     uniform float u_ambientStrength;
     uniform float u_specularStrength;
 
+    // --- Uniform NUEVO para Animación ---
+    uniform float uIsGolden; // Usamos float para evitar problemas de bool en drivers viejos (0.0 = false, 1.0 = true)
+
     void main() {
+        // 1. Borde Negro (Mantenemos tu lógica)
         if (u_isBorder > 0.5) {
             FragColor = vec4(0.0, 0.0, 0.0, 1.0);
             return;
         }
 
-        vec3 objectColor = u_faceColors[v_FaceID];
-        if (objectColor == vec3(0.0)) objectColor = vec3(0.05);
-
-        // vectores principales
+        // 2. Cálculo de vectores comunes
         vec3 norm = normalize(v_Normal);
         vec3 lightDir = normalize(u_lightPos - v_FragPos);
         vec3 viewDir  = normalize(u_viewPos - v_FragPos);
         vec3 reflectDir = reflect(-lightDir, norm);
 
-        // componentes
-        float diff = max(dot(norm, lightDir), 0.0);
-        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 256.0);
+        // 3. Variables para el color final
+        vec3 result;
 
-        vec3 ambient = u_ambientStrength * u_lightColor;
-        vec3 diffuse = diff * u_lightColor;
-        vec3 specular = u_specularStrength * spec * u_lightColor;
+        // =========================================================
+        // LÓGICA DE SELECCIÓN DE MATERIAL (Normal vs Dorado)
+        // =========================================================
+        if (uIsGolden > 0.5) {
+            // --- MATERIAL DORADO ---
+            vec3 goldAlbedo = vec3(1.0, 0.84, 0.0); // Base dorada
+            
+            // Iluminación para metal (más especular, menos difuso puro)
+            float diff = max(dot(norm, lightDir), 0.0);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 64.0); // Brillo más concentrado
 
-        // vec3 result = (ambient + diffuse + specular) * objectColor;
-		vec3 ambient_diffuse_part = (ambient + diffuse) * objectColor;
-		vec3 result = ambient_diffuse_part + specular; // 
+            vec3 ambient = vec3(0.2) * goldAlbedo; // Ambiente dorado tenue
+            vec3 diffuse = diff * goldAlbedo;
+            vec3 specular = spec * vec3(1.0, 1.0, 0.8); // Brillo casi blanco/amarillo
+
+            result = ambient + diffuse + specular;
+
+        } else {
+            // --- MATERIAL RUBIK ORIGINAL (Tu código) ---
+            vec3 objectColor = u_faceColors[v_FaceID];
+            if (objectColor == vec3(0.0)) objectColor = vec3(0.05);
+
+            float diff = max(dot(norm, lightDir), 0.0);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 256.0);
+
+            vec3 ambient = u_ambientStrength * u_lightColor;
+            vec3 diffuse = diff * u_lightColor;
+            vec3 specular = u_specularStrength * spec * u_lightColor;
+
+            vec3 ambient_diffuse_part = (ambient + diffuse) * objectColor;
+            result = ambient_diffuse_part + specular;
+        }
 
         FragColor = vec4(result, 1.0);
     }
 )glsl";
 
+
+//--------------------------AGUJERO NEGRO--------------------------
+
+// --- SHADERS PARA EL AGUJERO NEGRO ---
+
+const char* blackHoleVertexSource = R"glsl(
+    #version 330 core
+    layout (location = 0) in vec3 aPos;
+    layout (location = 1) in vec3 aNormal;
+
+    out vec3 Normal;
+    out vec3 FragPos;
+
+    uniform mat4 model;
+    uniform mat4 view;
+    uniform mat4 projection;
+
+    void main() {
+        FragPos = vec3(model * vec4(aPos, 1.0));
+        // Recalcular normal para que rote con la esfera si es necesario
+        Normal = mat3(transpose(inverse(model))) * aNormal; 
+        gl_Position = projection * view * vec4(FragPos, 1.0);
+    }
+)glsl";
+
+const char* blackHoleFragmentSource = R"glsl(
+    #version 330 core
+    out vec4 FragColor;
+
+    in vec3 Normal;
+    in vec3 FragPos;
+
+    uniform vec3 viewPos; // Posición de la cámara
+
+    void main() {
+        // 1. Color base del agujero (Negro puro)
+        vec3 baseColor = vec3(0.0, 0.0, 0.0);
+
+        // 2. Calcular el efecto de borde (Fresnel / Rim Light)
+        vec3 norm = normalize(Normal);
+        vec3 viewDir = normalize(viewPos - FragPos);
+        
+        // Producto punto: 1.0 si miramos de frente, 0.0 si es el borde
+        float dotProduct = max(dot(norm, viewDir), 0.0);
+        
+        // Invertimos: 0.0 en el centro, 1.0 en el borde
+        float rimFactor = 1.0 - dotProduct;
+        
+        // Potenciamos para hacer el borde más fino y nítido (ajusta el 4.0 a tu gusto)
+        float rimIntensity = pow(rimFactor, 4.0);
+        
+        // Color del borde (Blanco brillante)
+        vec3 rimColor = vec3(1.0, 1.0, 1.0);
+
+        // Combinar: Negro en el centro + Borde blanco
+        vec3 finalColor = baseColor + (rimColor * rimIntensity * 2.0); 
+
+        FragColor = vec4(finalColor, 1.0);
+    }
+)glsl";
 
 // --- CLASE SHADER (SIMPLIFICADA) ---
 #include "shader.h"
@@ -1011,7 +1129,95 @@ private:
     }
 };
 
+//-----------------------------AGUJERO NEGRO---------------------------------
+// Estructura simple para el generador
+struct SphereMesh {
+    unsigned int VAO, VBO, EBO;
+    unsigned int indexCount;
+};
 
+SphereMesh createSphere(float radius, int sectors, int stacks) {
+    SphereMesh mesh;
+    std::vector<float> vertices;
+    std::vector<unsigned int> indices;
+
+    float x, y, z, xy;                              // vertex position
+    float nx, ny, nz, lengthInv = 1.0f / radius;    // vertex normal
+
+    float sectorStep = 2 * M_PI / sectors;
+    float stackStep = M_PI / stacks;
+    float sectorAngle, stackAngle;
+
+    for(int i = 0; i <= stacks; ++i) {
+        stackAngle = M_PI / 2 - i * stackStep;        // starting from pi/2 to -pi/2
+        xy = radius * cosf(stackAngle);             // r * cos(u)
+        z = radius * sinf(stackAngle);              // r * sin(u)
+
+        for(int j = 0; j <= sectors; ++j) {
+            sectorAngle = j * sectorStep;           // starting from 0 to 2pi
+
+            // Vertex position (x, y, z)
+            x = xy * cosf(sectorAngle);             // r * cos(u) * cos(v)
+            y = xy * sinf(sectorAngle);             // r * cos(u) * sin(v)
+            
+            // Normalized vertex normal (nx, ny, nz)
+            nx = x * lengthInv;
+            ny = y * lengthInv;
+            nz = z * lengthInv;
+
+            // Push positions and normals
+            vertices.push_back(x);
+            vertices.push_back(y);
+            vertices.push_back(z);
+            vertices.push_back(nx);
+            vertices.push_back(ny);
+            vertices.push_back(nz);
+        }
+    }
+
+    // Generate indices
+    int k1, k2;
+    for(int i = 0; i < stacks; ++i) {
+        k1 = i * (sectors + 1);     // beginning of current stack
+        k2 = k1 + sectors + 1;      // beginning of next stack
+
+        for(int j = 0; j < sectors; ++j, ++k1, ++k2) {
+            if(i != 0) {
+                indices.push_back(k1);
+                indices.push_back(k2);
+                indices.push_back(k1 + 1);
+            }
+            if(i != (stacks - 1)) {
+                indices.push_back(k1 + 1);
+                indices.push_back(k2);
+                indices.push_back(k2 + 1);
+            }
+        }
+    }
+
+    mesh.indexCount = (unsigned int)indices.size();
+
+    glGenVertexArrays(1, &mesh.VAO);
+    glGenBuffers(1, &mesh.VBO);
+    glGenBuffers(1, &mesh.EBO);
+
+    glBindVertexArray(mesh.VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.VBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+
+    // Posición (Location 0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Normal (Location 1)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    return mesh;
+}
 
 // ----SOLVER---
 void resolverCubo(RubiksCube* g_rubiksCube) {
@@ -1049,13 +1255,34 @@ void resolverCubo(RubiksCube* g_rubiksCube) {
     }
 }
 //-------------------variables globales-----------------------
-RubiksCube* g_rubiksCube = nullptr;
-bool keyProcessed[348] = {false};
-Vec3 g_cameraPos(0.0f, 0.0f, 5.0f);
+	RubiksCube* g_rubiksCube = nullptr;
+	bool keyProcessed[348] = {false};
+	Vec3 g_cameraPos(0.0f, 0.0f, 30.0f);
 
-enum class ActiveFace { FRONT = 1, BACK, LEFT, RIGHT, UP, DOWN };
+	enum class ActiveFace { FRONT = 1, BACK, LEFT, RIGHT, UP, DOWN };
 
-ActiveFace g_activeFace = ActiveFace::FRONT;
+	ActiveFace g_activeFace = ActiveFace::FRONT;
+
+
+	// --- Variables de Animación ---
+	enum AnimationState {
+		NORMAL,
+		ABSORBING,      // Siendo tragado
+		HIDDEN,         // Totalmente dentro del agujero (invisible)
+		EJECTING,       // Saliendo disparado
+		DONE            // Terminó, cubo dorado flotando
+	};
+
+	AnimationState animState = NORMAL;
+	float animationTimer = 0.0f;
+	Vec3 blackHolePos(3.0f, 2.0f, -20.0f); // Posición donde estará el agujero (a la derecha y fondo)
+	float absorbFactor = 0.0f; // 0 a 1
+	bool isGolden = false;
+
+	// Trigger para iniciar la animación (puedes vincularlo a una tecla)
+	bool startBlackHoleAnimation = false;
+	
+	
 
 bool adjustClockwiseForView(Axis axis, int slice, bool clockwise, ActiveFace view) {
     bool visualClockwise = clockwise;
@@ -1223,9 +1450,6 @@ void processAnimationQueue() {
     applyMoveAsKeyCallback(mov);
 }
 
-
-
-
 	float yaw   = -90.0f;   // mira hacia -Z
 	float pitch = 0.0f;
 	Vec3 cameraFront(0.0f, 0.0f, -1.0f);
@@ -1286,6 +1510,13 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 						  << (g_counterClockwise ? "CounterClockwise" : "Clockwise")
 						  << std::endl;
 				break;
+				
+			case GLFW_KEY_B:
+			if (animState == NORMAL) {
+				startBlackHoleAnimation = true;
+				animState = ABSORBING;
+				animationTimer = 0.0f;
+			}
 					
 
 			// ---------------- SELECCIÓN DE CARA ACTIVA ----------------
@@ -1333,7 +1564,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 }
 
 
-// --- 8. FUNCIÓN MAIN ---
+/*
 int main() {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -1358,6 +1589,9 @@ int main() {
     glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
 
     Shader cubieShader(vertexShaderSource, fragmentShaderSource);
+	
+	Shader blackHoleShader(blackHoleVertexSource, blackHoleFragmentSource); // El nuevo shader
+	SphereMesh blackHoleMesh = createSphere(21.0f, 36, 18); // La malla de la esfera
 
     RubiksCube rubiksCube;
     rubiksCube.setupMesh();
@@ -1369,6 +1603,8 @@ int main() {
 	cubieShader.setVec3("u_lightColor", Vec3(1.0f, 1.0f, 1.0f)); // luz blanca
 	cubieShader.setFloat("u_ambientStrength", 0.4f);
 	cubieShader.setFloat("u_specularStrength", 10.1f);
+	
+	
 	
 	std::cout << "\n\n===================== CONTROLES DEL CUBO =====================\n";
 
@@ -1410,38 +1646,95 @@ int main() {
 	std::cout << "  P --> derecha (giro horizontal)\n";
 
 	std::cout << "\n===============================================================\n\n";
-
 	
-    while (!glfwWindowShouldClose(window)) {
-		// --- Calculo de DeltaTime ---
+	
+	while (!glfwWindowShouldClose(window)) {
+        // --- Calculo de DeltaTime ---
         double currentTime = glfwGetTime();
         float deltaTime = (float)(currentTime - lastTime);
         lastTime = currentTime;
-		
+        
         glClearColor(0.8f, 0.8f, 0.8f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		
-        //Vec3 eye = g_cameraPos;
-        //Vec3 center(g_cameraPos.x, g_cameraPos.y, g_cameraPos.z - 1.0f); 
-  
+        
+        // CORRECCIÓN DE SINTAXIS: Tenías el código cortado aquí
         Vec3 up(0.0f, 1.0f, 0.0f);
-
-        //Mat4 view = lookAt(eye, center, up);
-		Mat4 view = lookAt(g_cameraPos, g_cameraPos + cameraFront, cameraUp);
-
+        Mat4 view = lookAt(g_cameraPos, g_cameraPos + cameraFront, cameraUp);
         Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-		
-		rubiksCube.update(deltaTime);
-		
+        
+        // ---------------------------------------------------------
+        // 1. DIBUJAR AGUJERO NEGRO
+        // ---------------------------------------------------------
+        blackHoleShader.use();
+        
+        Mat4 modelBH; 
+        identity(modelBH.m);
+        translate(modelBH.m, blackHolePos.x, blackHolePos.y, blackHolePos.z);
+        
+        blackHoleShader.setMat4("model", modelBH.m);
+        blackHoleShader.setMat4("view", view.m);
+        blackHoleShader.setMat4("projection", proj.m);
+        blackHoleShader.setVec3("viewPos", g_cameraPos); 
+
+        glBindVertexArray(blackHoleMesh.VAO);
+        glDrawElements(GL_TRIANGLES, blackHoleMesh.indexCount, GL_UNSIGNED_INT, 0);
+        
+        // ---------------------------------------------------------
+        // 2. LÓGICA DE ANIMACIÓN (Actualizar variables C++)
+        // ---------------------------------------------------------
+        if (animState == ABSORBING) {
+            animationTimer += deltaTime;
+            absorbFactor = animationTimer * 0.5f; 
+            if (absorbFactor >= 1.5f) { 
+                animState = HIDDEN;
+                animationTimer = 0.0f;
+            }
+        } 
+        else if (animState == HIDDEN) {
+            animationTimer += deltaTime;
+            absorbFactor = 2.0f; 
+            if (animationTimer > 1.0f) { 
+                animState = EJECTING;
+                isGolden = true; 
+                animationTimer = 0.0f;
+            }
+        }
+        else if (animState == EJECTING) {
+            animationTimer += deltaTime;
+            absorbFactor = 1.5f - (animationTimer * 1.0f);
+            if (absorbFactor <= 0.0f) {
+                absorbFactor = 0.0f;
+                animState = DONE;
+            }
+        }
+
+        // Actualizar lógica interna del cubo (giros, etc.)
+        rubiksCube.update(deltaTime);
+        
+        // ---------------------------------------------------------
+        // 3. DIBUJAR EL CUBO RUBIK
+        // ---------------------------------------------------------
         cubieShader.use();       
-		cubieShader.setMat4("projection", proj.m);
+
+        // A) Matrices Standard
+        cubieShader.setMat4("projection", proj.m);
         cubieShader.setMat4("view", view.m);
+        cubieShader.setVec3("u_viewPos", g_cameraPos);
 
-		cubieShader.setVec3("u_viewPos", g_cameraPos);
-		processAnimationQueue();
+        // B) CORRECCIÓN CRÍTICA: Enviar uniformes de animación ANTES de dibujar
+        cubieShader.setVec3("uBlackHolePos", blackHolePos);
+        cubieShader.setFloat("uAbsorbFactor", absorbFactor);
+        cubieShader.setFloat("uTime", (float)glfwGetTime());
+        // Nota: Asegúrate que uIsGolden en el shader sea un 'int' o 'bool'. 
+        // Si usas setFloat, en el shader recibelo como float y compara > 0.5
+        cubieShader.setInt("uIsGolden", isGolden ? 1 : 0); 
 
+        // Procesar cola de giros (si tienes alguna lógica extra aquí)
+        processAnimationQueue();
+
+        // C) Ahora sí, dibujar. El shader ya tiene los datos necesarios.
         rubiksCube.draw(cubieShader);
-
+        
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -1449,3 +1742,221 @@ int main() {
     glfwTerminate();
     return 0;
 }
+
+*/
+
+// ... includes y configuración previa ...
+
+int main() {
+    // --- INICIALIZACIÓN STANDARD (Igual que antes) ---
+    glfwInit();
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Invasion Cubo Rubik", NULL, NULL);
+    if (window == NULL) {
+        glfwTerminate(); return -1;
+    }
+    glfwMakeContextCurrent(window);
+    glfwSetKeyCallback(window, key_callback);
+    if (!gladLoadGL(glfwGetProcAddress)) return -1;
+    glEnable(GL_DEPTH_TEST);
+
+    // --- SHADERS ---
+    Shader cubieShader(vertexShaderSource, fragmentShaderSource);
+    Shader blackHoleShader(blackHoleVertexSource, blackHoleFragmentSource);
+    SphereMesh blackHoleMesh = createSphere(3.0f, 36, 18); // Agujero negro (Radio 3)
+
+    // --- CREAR 10 CUBOS ---
+    const int NUM_CUBES = 10;
+    std::vector<RubiksCube> cubes(NUM_CUBES); // Vector de 10 objetos
+    std::vector<Vec3> startPositions(NUM_CUBES); // Posiciones iniciales
+    
+    // Configurar cada cubo
+    for(int i = 0; i < NUM_CUBES; i++) {
+        cubes[i].setupMesh();
+        
+        // Generar posiciones aleatorias alrededor (frente a la cámara)
+        // Rango X: -10 a 10, Y: -5 a 5, Z: 0 a -15
+        float rx = (float)(rand() % 20 - 10);
+        float ry = (float)(rand() % 10 - 5);
+        float rz = (float)(rand() % 15) * -1.0f;
+        
+        // El cubo 0 será el "Elegido" (el que sale al final), lo ponemos al centro
+        if(i == 0) startPositions[i] = Vec3(0.0f, 0.0f, 0.0f); 
+        else startPositions[i] = Vec3(rx, ry, rz);
+    }
+
+    // Puntero global para controles (apuntamos al cubo 0, el superviviente)
+    g_rubiksCube = &cubes[0]; 
+
+    // --- CONFIGURACIÓN SHADER ---
+    cubieShader.use();
+    // Colores del Rubik
+    Vec3 coloresRubik[6] = {
+        Vec3(1.0f, 0.5f, 0.0f), Vec3(1.0f, 0.0f, 0.0f),
+        Vec3(1.0f, 1.0f, 0.0f), Vec3(1.0f, 1.0f, 1.0f),
+        Vec3(0.0f, 0.0f, 1.0f), Vec3(0.0f, 1.0f, 0.0f)
+    };
+    cubieShader.setVec3Array("u_faceColors", 6, coloresRubik);
+    cubieShader.setVec3("u_lightPos", Vec3(0.0f, 5.0f, 10.0f));
+    cubieShader.setVec3("u_lightColor", Vec3(1.0f, 1.0f, 1.0f));
+    cubieShader.setFloat("u_ambientStrength", 0.4f);
+    cubieShader.setFloat("u_specularStrength", 10.1f);
+
+    // --- VARIABLES DE ANIMACIÓN ---
+    enum AnimationState { NORMAL, ABSORBING, HIDDEN, EJECTING, DONE };
+    AnimationState animState = NORMAL;
+    
+    double lastTime = glfwGetTime();
+    float animationTimer = 0.0f;
+    
+    Vec3 blackHolePos(5.0f, 2.0f, -25.0f); // Agujero lejos al fondo
+    float absorbFactor = 0.0f;
+    bool isGolden = false;
+
+    // --- BUCLE PRINCIPAL ---
+    while (!glfwWindowShouldClose(window)) {
+        double currentTime = glfwGetTime();
+        float deltaTime = (float)(currentTime - lastTime);
+        lastTime = currentTime;
+        
+        // Inputs para iniciar animación (Tecla B)
+        if (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS && animState == NORMAL) {
+            animState = ABSORBING;
+        }
+
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f); // Fondo gris oscuro/espacial
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        
+        Vec3 up(0.0f, 1.0f, 0.0f);
+        Mat4 view = lookAt(g_cameraPos, g_cameraPos + cameraFront, cameraUp);
+        Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+
+        // ---------------------------------------------------------
+        // 1. DIBUJAR AGUJERO NEGRO
+        // ---------------------------------------------------------
+        blackHoleShader.use();
+        Mat4 modelBH; 
+        identity(modelBH.m);
+        translate(modelBH.m, blackHolePos.x, blackHolePos.y, blackHolePos.z);
+        // Hacemos que el agujero pulse un poco
+        float pulse = 1.0f + 0.1f * sin(currentTime * 2.0); 
+        scale(modelBH.m, pulse, pulse, pulse);
+
+        blackHoleShader.setMat4("model", modelBH.m);
+        blackHoleShader.setMat4("view", view.m);
+        blackHoleShader.setMat4("projection", proj.m);
+        blackHoleShader.setVec3("viewPos", g_cameraPos); 
+        glBindVertexArray(blackHoleMesh.VAO);
+        glDrawElements(GL_TRIANGLES, blackHoleMesh.indexCount, GL_UNSIGNED_INT, 0);
+
+        // ---------------------------------------------------------
+        // 2. LÓGICA DE ANIMACIÓN (ESTADOS)
+        // ---------------------------------------------------------
+        if (animState == ABSORBING) {
+            animationTimer += deltaTime;
+            absorbFactor = animationTimer * 0.4f; // Velocidad de distorsión
+            
+            // Si quieres que giren aleatoriamente mientras vuelan (opcional)
+            // if ((int)(currentTime * 10) % 5 == 0) processRandomMove();
+
+            if (absorbFactor >= 1.5f) {
+                animState = HIDDEN;
+                animationTimer = 0.0f;
+            }
+        } 
+        else if (animState == HIDDEN) {
+            animationTimer += deltaTime;
+            absorbFactor = 2.0f;
+            if (animationTimer > 1.5f) { // Tiempo de espera dentro del agujero
+                animState = EJECTING;
+                isGolden = true;
+                animationTimer = 0.0f;
+            }
+        }
+        else if (animState == EJECTING) {
+            animationTimer += deltaTime;
+            absorbFactor = 1.5f - (animationTimer * 0.8f);
+            if (absorbFactor <= 0.0f) {
+                absorbFactor = 0.0f;
+                animState = DONE;
+            }
+        }
+
+        // Actualizar lógica de giros de CADA cubo
+        for(int i=0; i<NUM_CUBES; i++) {
+             cubes[i].update(deltaTime);
+        }
+
+        // ---------------------------------------------------------
+        // 3. DIBUJAR LOS 10 CUBOS
+        // ---------------------------------------------------------
+        cubieShader.use();
+        cubieShader.setMat4("projection", proj.m);
+        cubieShader.setMat4("view", view.m);
+        cubieShader.setVec3("u_viewPos", g_cameraPos);
+        
+        // Uniforms de Animación Globales
+        cubieShader.setVec3("uBlackHolePos", blackHolePos);
+        cubieShader.setFloat("uAbsorbFactor", absorbFactor);
+        cubieShader.setFloat("uTime", (float)currentTime);
+        cubieShader.setFloat("uIsGolden", isGolden ? 1.0f : 0.0f);
+
+        processAnimationQueue(); // Procesa la cola del cubo activo (el 0)
+
+        // BUCLE DE RENDERIZADO DE CUBOS
+        for(int i = 0; i < NUM_CUBES; i++) {
+            
+            // --- LÓGICA DE MOVIMIENTO INDIVIDUAL ---
+            Vec3 currentPos = startPositions[i];
+            
+            if (animState == ABSORBING) {
+                // Interpolar desde Posición Inicial -> Agujero Negro
+                // Usamos una función smoothstep o simple lerp basado en absorbFactor
+                float t = std::min(absorbFactor / 1.2f, 1.0f); // Normalizamos 0 a 1
+                t = t * t; // Aceleración cuadrática (empiezan lento, terminan rápido)
+                
+                // Lerp manual: A + (B-A)*t
+                currentPos.x = startPositions[i].x + (blackHolePos.x - startPositions[i].x) * t;
+                currentPos.y = startPositions[i].y + (blackHolePos.y - startPositions[i].y) * t;
+                currentPos.z = startPositions[i].z + (blackHolePos.z - startPositions[i].z) * t;
+            }
+            else if (animState == HIDDEN) {
+                // No dibujamos nada o los mandamos lejísimos
+                continue; 
+            }
+            else if (animState == EJECTING || animState == DONE) {
+                // SOLO DIBUJAMOS EL CUBO 0 (EL SUPERVIVIENTE)
+                if (i != 0) continue; 
+                
+                // El cubo 0 sale del agujero hacia el centro (0,0,0) o donde quieras
+                if (animState == EJECTING) {
+                    float t = 1.0f - (absorbFactor / 1.5f); // Inverso
+                    // Interpolacion Agujero -> Origen
+                    Vec3 targetPos(0.0f, 0.0f, 0.0f); 
+                    currentPos.x = blackHolePos.x + (targetPos.x - blackHolePos.x) * t;
+                    currentPos.y = blackHolePos.y + (targetPos.y - blackHolePos.y) * t;
+                    currentPos.z = blackHolePos.z + (targetPos.z - blackHolePos.z) * t;
+                } else {
+                    currentPos = Vec3(0.0f, 0.0f, 5.0f); // Posición final
+                }
+            }
+
+            // ENVIAR POSICIÓN AL SHADER
+            // Esto se suma a la posición de los cubies en el Vertex Shader
+            cubieShader.setVec3("u_worldOffset", currentPos);
+
+            // Dibujar este cubo específico
+            cubes[i].draw(cubieShader);
+        }
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+    glfwTerminate();
+    return 0;
+}
+
+
