@@ -1,1372 +1,295 @@
-// ----------------------------------------------------------------------------
-// CUBO DE RUBIK
-// ----------------------------------------------------------------------------
-
-// --- 1. INCLUDES ---
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-// --------------
+
 #include <iostream>
-#include <string>
 #include <vector>
-#include <map>
-#include <array>
-#include <sstream>
-#include <fstream>
-#include <cstddef>      
-#include <algorithm>
+#include <cmath>
+#include <functional>
 
-extern "C" {
-    #include "kociemba/ckociemba/include/search.h"
-}
-#include <queue>
-#include <string>
-#include <sstream>
-
-std::deque<std::string> g_animationQueue;
-
-// --- CONFIGURACIÓN ---
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
-
-// --- LIBRERÍA MATEMÁTICA---
 #include "matLibrary.h"
+#include "ShaderUtils.h"
+#include "Geometry.h"
+#include "Scene.h"
+#include "RubiksCube.h" // Incluir la cabecera del Rubik
 
-// --- SHADERS (INTERNOS) ---
-
-// Vertex Shader
-const char* vertexShaderSource = R"glsl(
-    #version 330 core
-    layout (location = 0) in vec3 aPos;
-	layout (location = 1) in vec3 anormal;
-    layout (location = 2) in int aFaceID;
-
-    uniform mat4 model;
-    uniform mat4 view;
-    uniform mat4 projection;
-
-    out vec3 v_FragPos;
-    out vec3 v_Normal;
-    flat out int v_FaceID;
-
-    void main() {
-        // Posición transformada
-        gl_Position = projection * view * model * vec4(aPos, 1.0);
-        v_FragPos = vec3(model * vec4(aPos, 1.0));
-
-        // Transformar normal con la matriz del modelo
-        mat3 normalMatrix = mat3(transpose(inverse(model)));
-        v_Normal = normalize(normalMatrix * anormal);
-        v_FaceID = aFaceID;
-    }
-)glsl";
-
-
-const char* fragmentShaderSource = R"glsl(
-    #version 330 core
-    out vec4 FragColor;
-
-    flat in int v_FaceID;
-    in vec3 v_Normal;
-    in vec3 v_FragPos;
-
-    uniform vec3 u_faceColors[6];
-    uniform float u_isBorder;
-
-    // --- Iluminación ---
-    uniform vec3 u_lightPos;
-    uniform vec3 u_viewPos;
-    uniform vec3 u_lightColor;
-    uniform float u_ambientStrength;
-    uniform float u_specularStrength;
-
-    void main() {
-        if (u_isBorder > 0.5) {
-            FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-            return;
-        }
-
-        vec3 objectColor = u_faceColors[v_FaceID];
-        if (objectColor == vec3(0.0)) objectColor = vec3(0.05);
-
-        // vectores principales
-        vec3 norm = normalize(v_Normal);
-        vec3 lightDir = normalize(u_lightPos - v_FragPos);
-        vec3 viewDir  = normalize(u_viewPos - v_FragPos);
-        vec3 reflectDir = reflect(-lightDir, norm);
-
-        // componentes
-        float diff = max(dot(norm, lightDir), 0.0);
-        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 256.0);
-
-        vec3 ambient = u_ambientStrength * u_lightColor;
-        vec3 diffuse = diff * u_lightColor;
-        vec3 specular = u_specularStrength * spec * u_lightColor;
-
-        // vec3 result = (ambient + diffuse + specular) * objectColor;
-		vec3 ambient_diffuse_part = (ambient + diffuse) * objectColor;
-		vec3 result = ambient_diffuse_part + specular; // 
-
-        FragColor = vec4(result, 1.0);
-    }
-)glsl";
-
-
-// --- CLASE SHADER (SIMPLIFICADA) ---
-#include "shader.h"
-
-// --- ENUMS Y CLASES DEL CUBO ---
-
-enum class Color { WHITE, YELLOW, RED, ORANGE, GREEN, BLUE, BLACK };
-enum class Face { UP, DOWN, LEFT, RIGHT, FRONT, BACK };
-enum class Axis { X, Y, Z };
-char colorEnumToChar(Color c) {
-    switch (c) {
-        case Color::WHITE:  return 'U';
-        case Color::YELLOW: return 'D';
-        case Color::RED:    return 'F';
-        case Color::ORANGE: return 'B'; // Asumiendo Naranja (Orange) es Back
-        case Color::GREEN:  return 'L'; // Asumiendo Verde (Green) es Left
-        case Color::BLUE:   return 'R'; // Asumiendo Azul (Blue) es Right
-        default:            return ' '; // Error
-    }
-}
-
-//using FaceColors = std::map<Face, Color>;
-
-bool g_counterClockwise = false;
-
-
-// CLASE CUBIE: Almacena el estado de color de 1 pieza
-class Cubie {
-public:
-    Cubie() {
-        identity(this->modelMatrix);
-        m_faces[Face::UP]    = Color::BLACK;
-        m_faces[Face::DOWN]  = Color::BLACK;
-        m_faces[Face::LEFT]  = Color::BLACK;
-        m_faces[Face::RIGHT] = Color::BLACK;
-        m_faces[Face::FRONT] = Color::BLACK;
-        m_faces[Face::BACK]  = Color::BLACK;
-    }
-
-    float modelMatrix[16];
-
-    void setFaceColor(Face face, Color color) { m_faces[face] = color; }
-    Color getFaceColor(Face face) const { return m_faces.at(face); }
-
-    void init(int x, int y, int z, float spacing) {
-        float px = (x - 1.0f) * spacing;
-        float py = (y - 1.0f) * spacing;
-        float pz = (z - 1.0f) * spacing;
-        translate(this->modelMatrix, px, py, pz);
-    }
-	
-	// --- NUEVOS: rotaciones de colores internas (no tocan modelMatrix) ---
-    // Rotación de colores alrededor de Y: clockwise visto desde arriba
-    void rotateFacesYClockwise() {
-        Color oldLeft  = m_faces[Face::LEFT];
-        Color oldFront = m_faces[Face::FRONT];
-        Color oldRight = m_faces[Face::RIGHT];
-        Color oldBack  = m_faces[Face::BACK];
-
-        // mapping clockwise: LEFT <- FRONT, FRONT <- RIGHT, RIGHT <- BACK, BACK <- LEFT
-        m_faces[Face::RIGHT] = oldFront;
-        m_faces[Face::BACK]  = oldRight;
-        m_faces[Face::LEFT]  = oldBack;
-        m_faces[Face::FRONT] = oldLeft;
-        // UP and DOWN remain unchanged
-    }
-
-    void rotateFacesYCounterClockwise() {
-        // inverse of clockwise
-        Color oldLeft  = m_faces[Face::LEFT];
-        Color oldFront = m_faces[Face::FRONT];
-        Color oldRight = m_faces[Face::RIGHT];
-        Color oldBack  = m_faces[Face::BACK];
-
-        m_faces[Face::RIGHT] = oldBack;
-        m_faces[Face::BACK]  = oldLeft;
-        m_faces[Face::LEFT]  = oldFront;
-        m_faces[Face::FRONT] = oldRight;
-    }
-
-    void rotateFacesXClockwise() {
-		Color oldUp    = m_faces[Face::UP];
-		Color oldFront = m_faces[Face::FRONT];
-		Color oldDown  = m_faces[Face::DOWN];
-		Color oldBack  = m_faces[Face::BACK];
-
-		// UP → BACK → DOWN → FRONT → UP
-		m_faces[Face::BACK]  = oldUp;
-		m_faces[Face::DOWN]  = oldBack;
-		m_faces[Face::FRONT] = oldDown;
-		m_faces[Face::UP]    = oldFront;
-		// LEFT/RIGHT stay the same
-	}
-
-	
-	void rotateFacesXCounterClockwise() {
-		Color oldUp    = m_faces[Face::UP];
-		Color oldFront = m_faces[Face::FRONT];
-		Color oldDown  = m_faces[Face::DOWN];
-		Color oldBack  = m_faces[Face::BACK];
-
-		// UP → FRONT → DOWN → BACK → UP
-		m_faces[Face::FRONT] = oldUp;
-		m_faces[Face::DOWN]  = oldFront;
-		m_faces[Face::BACK]  = oldDown;
-		m_faces[Face::UP]    = oldBack;
-		// LEFT/RIGHT stay the same
-	}
-	
-	// ---------------- ROTACIÓN DE COLORES EN EJE Z ----------------
-	void rotateFacesZClockwise() {
-		Color oldUp    = m_faces[Face::UP];
-		Color oldRight = m_faces[Face::RIGHT];
-		Color oldDown  = m_faces[Face::DOWN];
-		Color oldLeft  = m_faces[Face::LEFT];
-		
-		m_faces[Face::UP] = oldLeft;
-		m_faces[Face::LEFT] = oldDown;
-		m_faces[Face::DOWN] = oldRight;
-		m_faces[Face::RIGHT] = oldUp;
-	}
-
-	void rotateFacesZCounterClockwise() {
-		Color oldUp    = m_faces[Face::UP];
-		Color oldRight = m_faces[Face::RIGHT];
-		Color oldDown  = m_faces[Face::DOWN];
-		Color oldLeft  = m_faces[Face::LEFT];
-		
-		m_faces[Face::UP] = oldRight;
-		m_faces[Face::RIGHT] = oldDown;
-		m_faces[Face::DOWN] = oldLeft;
-		m_faces[Face::LEFT] = oldUp;
-	}
-
-
-
-
-private:
-    std::map<Face, Color> m_faces;
+// -----------------------------------------------------------------------------
+// DEFINICIÓN DE ESTRUCTURA LIGHT
+// (Necesaria para pasar la luz al shader)
+// -----------------------------------------------------------------------------
+struct Light {
+    Vec3 position;
+    Vec3 ambient;
+    Vec3 diffuse;
+    Vec3 specular;
 };
 
-// CLASE ROTATIONGROUP
-class RotationGroup {
-public:
-    bool     m_isAnimating = false;
-    float    m_currentAngle = 0.0f;
-    float    m_targetAngle = 0.0f;
-    float    m_animationSpeed = 4.0f; // Velocidad (4 radianes/segundo)
-   
-    // Array de punteros a los cubies que se mueven (Tu idea)
-    std::vector<Cubie*> m_cubiesToAnimate; 
-   
-    Axis     m_axis;
-    int      m_slice;
-    bool     m_clockwise;
-
-public:
-    void start(std::vector<Cubie*>& cubies, Axis axis, int slice, bool clockwise) {
-        if (m_isAnimating) return;
-
-        m_isAnimating = true;
-        m_currentAngle = 0.0f;
-        m_targetAngle = clockwise ? (M_PI / 2.0f) : (-M_PI / 2.0f); // +/- 90 grados
-       
-        m_cubiesToAnimate = cubies;
-        m_axis = axis;
-        m_slice = slice;
-        m_clockwise = clockwise;
-    }
-
-    bool update(float deltaTime) {
-        if (!m_isAnimating) return false;
-
-
-        float direction = (m_targetAngle > 0) ? 1.0f : -1.0f;
-        float angle_to_rotate = direction * m_animationSpeed * deltaTime;
-       
-        if ( (m_targetAngle > 0 && m_currentAngle + angle_to_rotate >= m_targetAngle) ||
-             (m_targetAngle < 0 && m_currentAngle + angle_to_rotate <= m_targetAngle) ) 
-        {
-            angle_to_rotate = m_targetAngle - m_currentAngle; 
-
-            m_currentAngle = m_targetAngle;
-            m_isAnimating = false;
-            
-            // Aplicar la rotaciÃ³n final a las matrices
-            applyAnimationToCubies(angle_to_rotate);
-            return true; 
-        }
-       
-        m_currentAngle += angle_to_rotate;
-        // Aplicar la rotaciÃ³n incremental
-        applyAnimationToCubies(angle_to_rotate);
+// -----------------------------------------------------------------------------
+// HELPER: CUBOS VIAJEROS
+// Ahora acepta 'solveTime' para saber cuándo empezar a resolverse
+// -----------------------------------------------------------------------------
+std::function<void(SceneNode*, float, float)> createTravelerBehavior(float startDelay, float solveTime, Vec3 startPos, Vec3 glowColor) {
+    // Variable 'solved' capturada por valor (copia) para controlar el estado dentro de la lambda
+    bool solved = false; 
+    
+    return [startDelay, solveTime, startPos, glowColor, solved](SceneNode* n, float dt, float time) mutable {
         
-        return false;
-    }
-
-    // Nueva funciÃ³n para aplicar la rotaciÃ³n incremental
-    void applyAnimationToCubies(float angle_step) {
-        float incrementalRotation[16];
-        identity(incrementalRotation);
-        if (m_axis == Axis::X) rotateX(incrementalRotation, angle_step);
-        else if (m_axis == Axis::Y) rotateY(incrementalRotation, angle_step);
-        else if (m_axis == Axis::Z) rotateZ(incrementalRotation, angle_step);
-
-        for (Cubie* cubie : m_cubiesToAnimate) {
-            float tempModel[16];
-            
-            // Multiplicamos T * R 
-            multiply(tempModel, cubie->modelMatrix, incrementalRotation);
-            
-            for(int k=0; k<16; ++k) cubie->modelMatrix[k] = tempModel[k];
+        // --- LÓGICA DE RESOLUCIÓN AUTOMÁTICA ---
+        // Si no se ha resuelto aún y ya pasamos el tiempo designado...
+        if (!solved && time >= solveTime) {
+            if (n->rubiksCube) {
+                // Llamamos al solver (Kociemba)
+                // Esto generará la cola de animaciones para resolverlo
+                n->rubiksCube->solve();
+            }
+            solved = true; // Marcamos como resuelto para no llamarlo en cada frame
         }
-    }
 
-    // Esta funciÃ³n ahora solo se usa para la lÃ³gica de finalizaciÃ³n
-    void getFinalRotationMatrix(float M[16]) {
-        identity(M);
-        if (m_axis == Axis::X) rotateX(M, m_targetAngle);
-        else if (m_axis == Axis::Y) rotateY(M, m_targetAngle);
-        else if (m_axis == Axis::Z) rotateZ(M, m_targetAngle);
-    }
-   
-    bool isCubieInGroup(Cubie* c) {
-        if (!m_isAnimating) return false;
-        return std::find(m_cubiesToAnimate.begin(), m_cubiesToAnimate.end(), c) != m_cubiesToAnimate.end();
-    }
-};
+        // --- CONFIGURACIÓN DE MATERIAL ---
+        n->material.emission = glowColor * 0.3f; 
+        n->material.diffuse = Vec3(0.2f, 0.2f, 0.2f);
+        n->material.ambient = Vec3(0.1f, 0.1f, 0.1f);
 
-//--------------------------------CLASE RUBIKSCUBE-----------------------------------
+        // --- LÓGICA DE MOVIMIENTO (TRAYECTORIA) ---
+        float attractionDuration = 12.0f;
+        float vortexDuration = 20.0f;
+        float vortexEntryRadius = 12.0f; 
+        float disappearanceRadius = 5.5f; 
 
-	
-class RubiksCube {
-public:
-	RotationGroup m_animator;
+        float t_startAttraction = startDelay;
+        float t_startVortex = startDelay + attractionDuration;
 
-    RubiksCube() {
-        for (int z = 0; z <= 2; z++) { 
-			for (int y = 0; y <= 2; y++) { 
-				for (int x = 0; x <= 2; x++) {
-					//if (x == 1 && y == 1 && z == 1) continue;
+        float entryAngle = std::atan2(startPos.z, startPos.x);
 
-					int i = getIndex(x, y, z);
+        Vec3 transitionPos;
+        transitionPos.x = std::cos(entryAngle) * vortexEntryRadius;
+        transitionPos.y = 0.0f;
+        transitionPos.z = std::sin(entryAngle) * vortexEntryRadius;
 
-					m_cubies[i].init(x, y, z, m_spacing);
+        Vec3 currentPos;
+        float baseSize = 1.0f; 
+        Vec3 currentScale(baseSize, baseSize, baseSize);
 
-					if (z == 2) m_cubies[i].setFaceColor(Face::FRONT, Color::RED);
-					if (z == 0) m_cubies[i].setFaceColor(Face::BACK, Color::ORANGE);
-					if (y == 2) m_cubies[i].setFaceColor(Face::UP, Color::WHITE);
-					if (y == 0) m_cubies[i].setFaceColor(Face::DOWN, Color::YELLOW);
-					if (x == 0) m_cubies[i].setFaceColor(Face::LEFT, Color::GREEN);
-					if (x == 2) m_cubies[i].setFaceColor(Face::RIGHT, Color::BLUE);
-				}
-			}
-		}
-    }
+        if (time < t_startAttraction) {
+            currentPos = startPos;
+        } 
+        else if (time < t_startVortex) {
+            float t = (time - t_startAttraction) / attractionDuration;
+            currentPos = lerp(startPos, transitionPos, t);
+        } 
+        else {
+            float spiralTime = time - t_startVortex;
+            float t_spiral = spiralTime / vortexDuration;
+            if (t_spiral > 1.0f) t_spiral = 1.0f;
 
-    ~RubiksCube() {
-        glDeleteVertexArrays(1, &m_VAO);
-        glDeleteBuffers(1, &m_VBO);
-		glDeleteBuffers(1, &m_EBO_relleno);
-		glDeleteBuffers(1, &m_EBO_bordes);
-    }
+            float initialRadius = vortexEntryRadius;
+            float currentRadius = lerp(initialRadius, 0.5f, t_spiral);
 
-	
-    void setupMesh() {
-        float s = 0.5f;
-		class Vertex { 
-		public:
-			Vec3 pos;
-			Vec3 normal;
-			GLint faceID; 
-		};
-		std::vector<Vertex> vertices = {
-			// Cara DERECHA (+X)
-			{{s, s, s},     {1, 0, 0}, 0}, {{s,-s, s},     {1, 0, 0}, 0}, {{s,-s,-s},    {1, 0, 0}, 0},
-			{{s,-s,-s},    {1, 0, 0}, 0}, {{s, s,-s},     {1, 0, 0}, 0}, {{s, s, s},     {1, 0, 0}, 0},
+            float startAngle = entryAngle;
+            float orbitSpeed = 2.0f + (t_spiral * 10.0f); 
+            float currentAngle = startAngle + (spiralTime * orbitSpeed);
 
-			// Cara IZQUIERDA (-X)
-			{{-s, s, s},   {-1, 0, 0}, 1}, {{-s,-s,-s},   {-1, 0, 0}, 1}, {{-s,-s, s},   {-1, 0, 0}, 1},
-			{{-s,-s,-s},   {-1, 0, 0}, 1}, {{-s, s, s},   {-1, 0, 0}, 1}, {{-s, s,-s},   {-1, 0, 0}, 1},
+            currentPos.x = std::cos(currentAngle) * currentRadius;
+            currentPos.z = std::sin(currentAngle) * currentRadius;
+            currentPos.y = 0.0f; 
 
-			// Cara SUPERIOR (+Y)
-			{{-s, s,-s},   {0, 1, 0}, 2}, {{s, s, s},     {0, 1, 0}, 2}, {{s, s,-s},     {0, 1, 0}, 2},
-			{{s, s, s},     {0, 1, 0}, 2}, {{-s, s,-s},   {0, 1, 0}, 2}, {{-s, s, s},    {0, 1, 0}, 2},
-
-			// Cara INFERIOR (-Y)
-			{{-s,-s,-s},   {0,-1, 0}, 3}, {{s,-s,-s},     {0,-1, 0}, 3}, {{s,-s, s},     {0,-1, 0}, 3},
-			{{s,-s, s},     {0,-1, 0}, 3}, {{-s,-s, s},   {0,-1, 0}, 3}, {{-s,-s,-s},   {0,-1, 0}, 3},
-
-			// Cara FRONTAL (+Z)
-			{{-s,-s, s},   {0, 0, 1}, 4}, {{s,-s, s},     {0, 0, 1}, 4}, {{s, s, s},     {0, 0, 1}, 4},
-			{{s, s, s},     {0, 0, 1}, 4}, {{-s, s, s},   {0, 0, 1}, 4}, {{-s,-s, s},   {0, 0, 1}, 4},
-
-			// Cara TRASERA (-Z)
-			{{-s,-s,-s},   {0, 0,-1}, 5}, {{-s, s,-s},    {0, 0,-1}, 5}, {{s, s,-s},     {0, 0,-1}, 5},
-			{{s, s,-s},     {0, 0,-1}, 5}, {{s,-s,-s},    {0, 0,-1}, 5}, {{-s,-s,-s},   {0, 0,-1}, 5}
-		};
-		
-		const unsigned int INDICES_RELLENO[36] = {
-			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 
-			18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
-		};
-		
-		const unsigned int BORDER_INDICES[24] = {
-
-		// Cara Frontal
-		24, 25,  // Inferior
-		25, 26,  // Derecha (v2)
-		26, 28,  // Superior (v4)
-		28, 24,  // Izquierda (v1)
-		// 2. Contorno de la Cara Trasera (Z-) - Usando los índices 30-35
-		30, 31, // Inferior (de (-s, -s, -s) a (s, -s, -s))
-		31, 32, // Derecha (de (s, -s, -s) a (s, s, -s))
-		32, 34, // Superior (de (s, s, -s) a (-s, s, -s))
-		34, 30, // Izquierda (de (-s, s, -s) a (-s, -s, -s))
-		
-		24, 30, // Inferior-Izquierda
-		25, 34, // Inferior-Derecha
-		26, 32, // Superior-Derecha
-		28, 31  // Superior-Izquierda
-
-
-		};
-
-        glGenVertexArrays(1, &m_VAO);
-        glGenBuffers(1, &m_VBO);
-		glGenBuffers(1, &m_EBO_relleno);
-		glGenBuffers(1, &m_EBO_bordes);
-        glBindVertexArray(m_VAO);
-        // VBO
-		glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
-		// EBO INDICES_RELLENO
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_relleno);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(INDICES_RELLENO), INDICES_RELLENO, GL_STATIC_DRAW);
-		// EBO BORDER_INDICES
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_bordes); 
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(BORDER_INDICES), BORDER_INDICES, GL_STATIC_DRAW);
-		
-        GLsizei stride = sizeof(Vertex);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, pos));
-        glEnableVertexAttribArray(0);
-		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Vertex, normal));
-		glEnableVertexAttribArray(1);
-        glVertexAttribIPointer(2, 1, GL_INT, stride, (void*)offsetof(Vertex, faceID));
-        glEnableVertexAttribArray(2);
-        glBindVertexArray(0);
-    }
-
-    void draw(Shader& shader) {
-        //shader.use();
-
-        glBindVertexArray(m_VAO);
-        Vec3 faceColors[6];
-
-        for (int i = 0; i < 27; i++){
-            Cubie& cubie = m_cubies[i];
-			
-			// --- 1. Calcular modelMatrix final (con animación si aplica) ---
-			float finalModel[16];
-			for (int k = 0; k < 16; ++k)
-				finalModel[k] = cubie.modelMatrix[k];
-
-			if (m_animator.isCubieInGroup(&cubie)) {
-				float R[16];
-				m_animator.getFinalRotationMatrix(R);
-				float temp[16];
-				multiply(temp, finalModel, R);
-				for (int k = 0; k < 16; ++k)
-					finalModel[k] = temp[k];
-			}
-
-			// Enviamos la matriz model de cada cubie
-            shader.setMat4("model", cubie.modelMatrix);
-			//shader.setMat4("model", finalModel);
-			// Enviamos los colores del cubie al shader
-            faceColors[0] = getVec3FromColor(cubie.getFaceColor(Face::RIGHT));
-            faceColors[1] = getVec3FromColor(cubie.getFaceColor(Face::LEFT));
-            faceColors[2] = getVec3FromColor(cubie.getFaceColor(Face::UP));
-            faceColors[3] = getVec3FromColor(cubie.getFaceColor(Face::DOWN));
-            faceColors[4] = getVec3FromColor(cubie.getFaceColor(Face::FRONT));
-            faceColors[5] = getVec3FromColor(cubie.getFaceColor(Face::BACK));
-			shader.setVec3Array("u_faceColors", 6, faceColors);
-			
-			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_relleno); 
-			shader.setFloat("u_isBorder", 0.0f);
-			glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
-			 
-			glLineWidth(10.0f);
-			shader.setFloat("u_isBorder", 1.0f);
-			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO_bordes); 
-			glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, 0);
-            //glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+            if (currentRadius < disappearanceRadius) {
+                currentScale = Vec3(0.0f, 0.0f, 0.0f);
+            } 
+            else {
+                float intensity = t_spiral * t_spiral; 
+                float stretchY = 1.0f + (intensity * 4.0f); 
+                float thinXZ = 1.0f / (1.0f + (intensity * 3.0f));
+                
+                currentScale.x = baseSize * thinXZ;
+                currentScale.y = baseSize * stretchY;
+                currentScale.z = baseSize * thinXZ;
+            }
         }
-        glBindVertexArray(0);
-    }
-	
-	void update(float deltaTime) {
-		if (m_animator.update(deltaTime)) {
-			// Cuando termina la animación, aplicar la rotación lógica
-			switch (m_animator.m_axis) {
-				case Axis::X:
-					if (m_animator.m_slice == 0) rotateLeftLayerClockwise();
-					else if (m_animator.m_slice == 1) rotateMiddleVerticalClockwise();
-					else if (m_animator.m_slice == 2) rotateRightLayerClockwise();
-					break;
-				case Axis::Y:
-					if (m_animator.m_slice == 0) rotateDownLayerClockwise();
-					else if (m_animator.m_slice == 1) rotateMiddleLayerClockwise();
-					else if (m_animator.m_slice == 2) rotateUpLayerClockwise();
-					break;
-				case Axis::Z:
-					if (m_animator.m_slice == 0) rotateBackLayerClockwise();
-					else if (m_animator.m_slice == 1) rotateMiddleDepthClockwise();
-					else if (m_animator.m_slice == 2) rotateFrontLayerClockwise();
-					break;
-			}
-		}
-	}
-	
-	void startRotation(Axis axis, int slice, bool clockwise) {
-		if (m_animator.m_isAnimating) return;
-
-		// Invertir sentido si es capa opuesta
-		if (axis == Axis::X && slice == 0) clockwise = !clockwise;
-		if (axis == Axis::Y && slice == 0) clockwise = !clockwise;
-		if (axis == Axis::Z && slice == 0) clockwise = !clockwise;
-
-		std::vector<Cubie*> group;
-		for (int i = 0; i < 27; ++i) {
-			int x = (i % 3);
-			int y = (i / 3) % 3;
-			int z = (i / 9);
-			if ((axis == Axis::X && x == slice) ||
-				(axis == Axis::Y && y == slice) ||
-				(axis == Axis::Z && z == slice)) {
-				group.push_back(&m_cubies[i]);
-			}
-		}
-
-		m_animator.start(group, axis, slice, clockwise);
-	}
-
-	// Rotar la capa UP (y == 2) 90° clockwise visto desde arriba
-	void rotateUpLayerClockwise() {
-		// Guardamos la capa en una matriz 3x3 (índices por x,z)
-		std::array<Cubie, 9> layerOld;
-		for (int z = 0; z < 3; ++z) {
-			for (int x = 0; x < 3; ++x) {
-				int idx = getIndex(x, 2, z);
-				layerOld[x + z*3] = m_cubies[idx]; // copia
-			}
-		}
-
-		// Creamos la nueva disposición: mapping clockwise visto desde arriba:
-		// newX = z; newZ = 2 - x
-		std::array<Cubie, 9> layerNew;
-		for (int z = 0; z < 3; ++z) {
-			for (int x = 0; x < 3; ++x) {
-				int newX, newZ;
-
-				if (g_counterClockwise) {
-					// Sentido antihorario (CounterClockwise)
-					newX = 2 - z;
-					newZ = x;
-				} else {
-					// Sentido horario (Clockwise)
-					newX = z;
-					newZ = 2 - x;
-				}
-
-				layerNew[newX + newZ*3] = layerOld[x + z*3];
-			}
-		}
-
-		// Colocamos las piezas en m_cubies con las nuevas posiciones y actualizamos modelMatrix e faces
-		for (int newZ = 0; newZ < 3; ++newZ) {
-			for (int newX = 0; newX < 3; ++newX) {
-				int destIdx = getIndex(newX, 2, newZ);
-				// Re-init la posición física en mundo (centros en x,y,z)
-				layerNew[newX + newZ*3].init(newX, 2, newZ, m_spacing);
-				// Rotamos la asignación de colores internamente (porque la pieza gira)
-				if (g_counterClockwise)
-					layerNew[newX + newZ*3].rotateFacesYCounterClockwise();
-				else
-					layerNew[newX + newZ*3].rotateFacesYClockwise();
-
-				// Copiamos de vuelta
-				m_cubies[destIdx] = layerNew[newX + newZ*3];
-			} 
-		}
-	}
-	
-	void rotateMiddleLayerClockwise() {
-		// y == 1
-		std::array<Cubie, 9> layerOld;
-		for (int z = 0; z < 3; ++z) {
-			for (int x = 0; x < 3; ++x) {
-				int idx = getIndex(x, 1, z);
-				layerOld[x + z*3] = m_cubies[idx];
-			}
-		}
-
-		// (x,z) -> (z, 2 - x)
-		std::array<Cubie, 9> layerNew;
-		for (int z = 0; z < 3; ++z) {
-			for (int x = 0; x < 3; ++x) {
-				int newX, newZ;
-
-				if (g_counterClockwise) {
-					// Sentido antihorario (CounterClockwise)
-					newX = 2 - z;
-					newZ = x;
-				} else {
-					// Sentido horario (Clockwise)
-					newX = z;
-					newZ = 2 - x;
-				}
-
-				layerNew[newX + newZ*3] = layerOld[x + z*3];
-			}
-		}
-
-		// Aplicar nueva disposición
-		for (int newZ = 0; newZ < 3; ++newZ) {
-			for (int newX = 0; newX < 3; ++newX) {
-				int destIdx = getIndex(newX, 1, newZ);
-				layerNew[newX + newZ*3].init(newX, 1, newZ, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newX + newZ*3].rotateFacesYCounterClockwise();
-				else
-					layerNew[newX + newZ*3].rotateFacesYClockwise();
-
-				m_cubies[destIdx] = layerNew[newX + newZ*3];
-			}
-		}
-	}
-
-
-	// ---------------- ROTACIÓN CAPA INFERIOR (DOWN) ----------------
-	void rotateDownLayerClockwise() {
-		// y == 0
-		std::array<Cubie, 9> layerOld;
-		for (int z = 0; z < 3; ++z) {
-			for (int x = 0; x < 3; ++x) {
-				int idx = getIndex(x, 0, z);
-				layerOld[x + z*3] = m_cubies[idx];
-			}
-		}
-
-		// (x,z) -> (z, 2 - x)
-		std::array<Cubie, 9> layerNew;
-		for (int z = 0; z < 3; ++z) {
-			for (int x = 0; x < 3; ++x) {
-				int newX, newZ;
-
-				if (g_counterClockwise) {
-					// Sentido antihorario (CounterClockwise)
-					newX = 2 - z;
-					newZ = x;
-				} else {
-					// Sentido horario (Clockwise)
-					newX = z;
-					newZ = 2 - x;
-				}
-
-				layerNew[newX + newZ*3] = layerOld[x + z*3];
-			}
-		}
-
-		for (int newZ = 0; newZ < 3; ++newZ) {
-			for (int newX = 0; newX < 3; ++newX) {
-				int destIdx = getIndex(newX, 0, newZ);
-				layerNew[newX + newZ*3].init(newX, 0, newZ, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newX + newZ*3].rotateFacesYCounterClockwise();
-				else
-					layerNew[newX + newZ*3].rotateFacesYClockwise();
-
-				m_cubies[destIdx] = layerNew[newX + newZ*3];
-			}
-		}
-	}
-	
-	// ---------------- ROTACIÓN CAPA DERECHA (x == 2) ----------------
-	void rotateRightLayerClockwise() {
-		std::array<Cubie, 9> layerOld;
-		for (int z = 0; z < 3; ++z)
-			for (int y = 0; y < 3; ++y)
-				layerOld[y + z*3] = m_cubies[getIndex(2, y, z)];
-
-		// (y,z) -> (z, 2 - y)
-		std::array<Cubie, 9> layerNew;
-		for (int z = 0; z < 3; ++z)
-			for (int y = 0; y < 3; ++y) {
-				int newY, newZ;
-				if (g_counterClockwise) {
-					// visto desde la derecha (−X)
-					newY = 2 - z;
-					newZ = y;
-				} else {
-					// horario visto desde la derecha (−X)
-					newY = z;
-					newZ = 2 - y;
-				}
-				layerNew[newY + newZ*3] = layerOld[y + z*3];
-			}
-
-		for (int newZ = 0; newZ < 3; ++newZ)
-			for (int newY = 0; newY < 3; ++newY) {
-				int destIdx = getIndex(2, newY, newZ);
-				layerNew[newY + newZ*3].init(2, newY, newZ, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newY + newZ*3].rotateFacesXCounterClockwise();
-				else
-					layerNew[newY + newZ*3].rotateFacesXClockwise();
-
-				m_cubies[destIdx] = layerNew[newY + newZ*3];
-			}
-	}
-
-	// ---------------- ROTACIÓN CAPA MEDIA VERTICAL (x == 1) ----------------
-	void rotateMiddleVerticalClockwise() {
-		std::array<Cubie, 9> layerOld;
-		for (int z = 0; z < 3; ++z)
-			for (int y = 0; y < 3; ++y)
-				layerOld[y + z*3] = m_cubies[getIndex(1, y, z)];
-
-		std::array<Cubie, 9> layerNew;
-		for (int z = 0; z < 3; ++z)
-			for (int y = 0; y < 3; ++y) {
-				int newY, newZ;
-				if (g_counterClockwise) {
-					newY = 2 - z;
-					newZ = y;
-				} else {
-					newY = z;
-					newZ = 2 - y;
-				}
-				layerNew[newY + newZ*3] = layerOld[y + z*3];
-			}
-
-		for (int newZ = 0; newZ < 3; ++newZ)
-			for (int newY = 0; newY < 3; ++newY) {
-				int destIdx = getIndex(1, newY, newZ);
-				layerNew[newY + newZ*3].init(1, newY, newZ, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newY + newZ*3].rotateFacesXCounterClockwise();
-				else
-					layerNew[newY + newZ*3].rotateFacesXClockwise();
-
-				m_cubies[destIdx] = layerNew[newY + newZ*3];
-			}
-	}
-
-	// ---------------- ROTACIÓN CAPA IZQUIERDA (x == 0) ----------------
-	void rotateLeftLayerClockwise() {
-		std::array<Cubie, 9> layerOld;
-		for (int z = 0; z < 3; ++z)
-			for (int y = 0; y < 3; ++y)
-				layerOld[y + z*3] = m_cubies[getIndex(0, y, z)];
-
-		std::array<Cubie, 9> layerNew;
-		for (int z = 0; z < 3; ++z)
-			for (int y = 0; y < 3; ++y) {
-				int newY, newZ;
-				if (g_counterClockwise) {
-					newY = 2 - z;
-					newZ = y;
-				} else {
-					newY = z;
-					newZ = 2 - y;
-				}
-				layerNew[newY + newZ*3] = layerOld[y + z*3];
-			}
-
-		for (int newZ = 0; newZ < 3; ++newZ)
-			for (int newY = 0; newY < 3; ++newY) {
-				int destIdx = getIndex(0, newY, newZ);
-				layerNew[newY + newZ*3].init(0, newY, newZ, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newY + newZ*3].rotateFacesXCounterClockwise();
-				else
-					layerNew[newY + newZ*3].rotateFacesXClockwise();
-
-				m_cubies[destIdx] = layerNew[newY + newZ*3];
-			}
-	}
-	
-	// ---------------- ROTACIÓN CAPA FRONTAL (z == 2) ----------------
-	void rotateFrontLayerClockwise() {
-		std::array<Cubie, 9> layerOld;
-		for (int y = 0; y < 3; ++y)
-			for (int x = 0; x < 3; ++x)
-				layerOld[x + y * 3] = m_cubies[getIndex(x, y, 2)];
-
-		std::array<Cubie, 9> layerNew;
-		for (int y = 0; y < 3; ++y)
-			for (int x = 0; x < 3; ++x) {
-				int newX, newY;
-				if (g_counterClockwise) {
-					newX = 2 - y;
-					newY = x;
-				} else {
-					newX = y;
-					newY = 2 - x;
-				}
-				layerNew[newX + newY * 3] = layerOld[x + y * 3];
-			}
-
-		for (int newY = 0; newY < 3; ++newY)
-			for (int newX = 0; newX < 3; ++newX) {
-				int destIdx = getIndex(newX, newY, 2);
-				layerNew[newX + newY * 3].init(newX, newY, 2, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newX + newY * 3].rotateFacesZCounterClockwise();
-				else
-					layerNew[newX + newY * 3].rotateFacesZClockwise();
-
-				m_cubies[destIdx] = layerNew[newX + newY * 3];
-			}
-	}
-
-	// ---------------- ROTACIÓN CAPA MEDIA PROFUNDIDAD (z == 1) ----------------
-	void rotateMiddleDepthClockwise() {
-		std::array<Cubie, 9> layerOld;
-		for (int y = 0; y < 3; ++y)
-			for (int x = 0; x < 3; ++x)
-				layerOld[x + y * 3] = m_cubies[getIndex(x, y, 1)];
-
-		std::array<Cubie, 9> layerNew;
-		for (int y = 0; y < 3; ++y)
-			for (int x = 0; x < 3; ++x) {
-				int newX, newY;
-				if (g_counterClockwise) {
-					newX = 2 - y;
-					newY = x;
-				} else {
-					newX = y;
-					newY = 2 - x;
-				}
-				layerNew[newX + newY * 3] = layerOld[x + y * 3];
-			}
-
-		for (int newY = 0; newY < 3; ++newY)
-			for (int newX = 0; newX < 3; ++newX) {
-				int destIdx = getIndex(newX, newY, 1);
-				layerNew[newX + newY * 3].init(newX, newY, 1, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newX + newY * 3].rotateFacesZCounterClockwise();
-				else
-					layerNew[newX + newY * 3].rotateFacesZClockwise();
-
-				m_cubies[destIdx] = layerNew[newX + newY * 3];
-			}
-	}
-	
-	// ---------------- ROTACIÓN CAPA TRASERA (z == 0) ----------------
-	void rotateBackLayerClockwise() {
-		std::array<Cubie, 9> layerOld;
-		for (int y = 0; y < 3; ++y)
-			for (int x = 0; x < 3; ++x)
-				layerOld[x + y * 3] = m_cubies[getIndex(x, y, 0)];
-
-		std::array<Cubie, 9> layerNew;
-		for (int y = 0; y < 3; ++y)
-			for (int x = 0; x < 3; ++x) {
-				int newX, newY;
-				if (g_counterClockwise) {
-					// Ojo: visto desde atrás, el sentido se invierte
-					newX = 2 - y;
-					newY = x;
-				} else {
-					newX = y;
-					newY = 2 - x;
-				}
-				layerNew[newX + newY * 3] = layerOld[x + y * 3];
-			}
-
-		for (int newY = 0; newY < 3; ++newY)
-			for (int newX = 0; newX < 3; ++newX) {
-				int destIdx = getIndex(newX, newY, 0);
-				layerNew[newX + newY * 3].init(newX, newY, 0, m_spacing);
-				if (g_counterClockwise)
-					layerNew[newX + newY * 3].rotateFacesZCounterClockwise();
-				else
-					layerNew[newX + newY * 3].rotateFacesZClockwise();
-
-				m_cubies[destIdx] = layerNew[newX + newY * 3];
-			}
-	}
-	std::string getFaceletString() {
-		char facelets[55]; // 54 + 1 para el '\0'
-			int idx = 0;
-
-
-			// PRIMERO: Determinar el mapeo dinámico basado en los centros
-			std::map<Color, char> colorToChar;
-			
-			// Los centros definen la correspondencia
-			colorToChar[getCubieAt(1, 2, 1).getFaceColor(Face::UP)]    = 'U';  // Centro U
-			colorToChar[getCubieAt(1, 0, 1).getFaceColor(Face::DOWN)]  = 'D';  // Centro D  
-			colorToChar[getCubieAt(1, 1, 2).getFaceColor(Face::FRONT)] = 'F';  // Centro F
-			colorToChar[getCubieAt(1, 1, 0).getFaceColor(Face::BACK)]  = 'B';  // Centro B
-			colorToChar[getCubieAt(0, 1, 1).getFaceColor(Face::LEFT)]  = 'L';  // Centro L
-			colorToChar[getCubieAt(2, 1, 1).getFaceColor(Face::RIGHT)] = 'R';  // Centro R
-			// --- Cara U (Up, y=2) ---
-			// Correcto: Lee U1..U9 (z=0, z=1, z=2)
-			for (int z = 0; z <= 2; z++) { // z=0 (Back), z=1, z=2 (Front)
-				for (int x = 0; x <= 2; x++) { // x=0 (Left), x=1, x=2 (Right)
-					//facelets[idx++] = colorEnumToChar(getCubieAt(x, 2, z).getFaceColor(Face::UP));
-					facelets[idx++] = colorToChar[getCubieAt(x, 2, z).getFaceColor(Face::UP)];
-
-				}
-			}
-
-			// --- Cara R (Right, x=2) ---
-			// CORREGIDO: Lee R1..R9 (z=2, z=1, z=0)
-			for (int y = 2; y >= 0; y--) { 
-				for (int z = 2; z >= 0; z--) { // ¡CAMBIADO! de 0..2 a 2..0
-					//facelets[idx++] = colorEnumToChar(getCubieAt(2, y, z).getFaceColor(Face::RIGHT));
-					facelets[idx++] = colorToChar[getCubieAt(2, y, z).getFaceColor(Face::RIGHT)];
-				}
-			}
-
-			// --- Cara F (Front, z=2) ---
-			// Correcto: Lee F1..F9 (y=2, y=1, y=0)
-			for (int y = 2; y >= 0; y--) {
-				for (int x = 0; x <= 2; x++) {
-					//facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 2).getFaceColor(Face::FRONT));
-					facelets[idx++] = colorToChar[getCubieAt(x, y, 2).getFaceColor(Face::FRONT)];
-				}
-			}
-
-			// --- Cara D (Down, y=0) ---
-			// Correcto: Lee D1..D9 (z=2, z=1, z=0)
-			for (int z = 2; z >= 0; z--) {
-				for (int x = 0; x <= 2; x++) {
-					//facelets[idx++] = colorEnumToChar(getCubieAt(x, 0, z).getFaceColor(Face::DOWN));
-					facelets[idx++] = colorToChar[getCubieAt(x, 0, z).getFaceColor(Face::DOWN)];
-				}
-			}
-
-			// --- Cara L (Left, x=0) ---
-			// CORREGIDO: Lee L1..L9 (z=0, z=1, z=2)
-			for (int y = 2; y >= 0; y--) {
-				for (int z = 0; z <= 2; z++) { // ¡CAMBIADO! de 2..0 a 0..2
-					//facelets[idx++] = colorEnumToChar(getCubieAt(0, y, z).getFaceColor(Face::LEFT));
-					facelets[idx++] = colorToChar[getCubieAt(0, y, z).getFaceColor(Face::LEFT)];
-				}
-			}
-
-			// --- Cara B (Back, z=0) ---
-			// Correcto: Lee B1..B9 (x=2, x=1, x=0)
-			for (int y = 2; y >= 0; y--) {
-				for (int x = 2; x >= 0; x--) {
-					//facelets[idx++] = colorEnumToChar(getCubieAt(x, y, 0).getFaceColor(Face::BACK));
-					facelets[idx++] = colorToChar[getCubieAt(x, y, 0).getFaceColor(Face::BACK)];
-
-				}
-			}
-
-			facelets[54] = '\0';
-			return std::string(facelets);
-	}
-	
-private:
-    std::array<Cubie, 27> m_cubies;
-    GLuint m_VAO, m_VBO;
-	GLuint m_EBO_relleno; // EBO para 36 índices (triángulos)
-	GLuint m_EBO_bordes;
-    const float m_spacing = 1.0f;
-
-    int getIndex(int x, int y, int z) const { 
-		return x + y * 3 + z * 9; 
-	}
-	Cubie& getCubieAt(int x, int y, int z) {
-		return m_cubies[getIndex(x, y, z)];
-	}
-
-    Vec3 getVec3FromColor(Color color) {
-        switch (color) {
-            case Color::WHITE:  return Vec3(1.0f, 1.0f, 1.0f);
-            case Color::YELLOW: return Vec3(1.0f, 1.0f, 0.0f);
-            case Color::RED:    return Vec3(1.0f, 0.0f, 0.0f);
-            case Color::ORANGE: return Vec3(1.0f, 0.5f, 0.0f);
-            case Color::GREEN:  return Vec3(0.0f, 1.0f, 0.0f);
-            case Color::BLUE:   return Vec3(0.0f, 0.0f, 1.0f);
-            case Color::BLACK:
-            default:            return Vec3(0.0f, 0.0f, 0.0f);
-        }
-    }
-};
-
-
-
-// ----SOLVER---
-void resolverCubo(RubiksCube* g_rubiksCube) {
-    if (!g_animationQueue.empty()) return; // Ya hay una solución en cola
-    //if (g_rubiksCube->m_animator.m_isAnimating) return; // Espera a que termine el movimiento actual
-
-    // 1. TRADUCIR
-    std::string s = g_rubiksCube->getFaceletString();
-	std::cout << "Facelets: " << s << std::endl;
-
-	char facelets_cstr[55];
-	snprintf(facelets_cstr, sizeof(facelets_cstr), "%s", s.c_str());
-
-
-    // 2. RESOLVER
-    // (Asegúrate de que la ruta "kociemba/cprunetables" sea correcta desde donde ejecutas el .exe)
-	char* sol = solution(facelets_cstr, 21, 45000, 0, "kociemba/cprunetables");
-
-    if (sol && strncmp(sol, "Error", 5) != 0) {
-        std::cout << "Solucion encontrada: " << sol << std::endl;
         
-        // 3. PARSEAR Y ENCOLAR
-        std::stringstream ss(sol);
-		//std::cout <<"s: " << ss << std::endl;
-        std::string move;
-        while (ss >> move) { // Lee la solución palabra por palabra (ej. "R", "U2", "F'")
-            g_animationQueue.push_back(move);
-        }
-    } else {
-        std::cout << "Error del solver: " << (sol ? sol : "Desconocido") << std::endl;
-    }
-
-    if (sol) {
-        free(sol); // ¡MUY IMPORTANTE! Libera la memoria que el C asignó.
-    }
-}
-//-------------------variables globales-----------------------
-RubiksCube* g_rubiksCube = nullptr;
-bool keyProcessed[348] = {false};
-Vec3 g_cameraPos(0.0f, 0.0f, 5.0f);
-
-enum class ActiveFace { FRONT = 1, BACK, LEFT, RIGHT, UP, DOWN };
-
-ActiveFace g_activeFace = ActiveFace::FRONT;
-
-bool adjustClockwiseForView(Axis axis, int slice, bool clockwise, ActiveFace view) {
-    bool visualClockwise = clockwise;
-
-    switch (axis) {
-        case Axis::X:
-            if (view == ActiveFace::LEFT) visualClockwise = !clockwise;
-            break;
-        case Axis::Y:
-            if (view == ActiveFace::FRONT || view == ActiveFace::RIGHT || view == ActiveFace::LEFT)
-                visualClockwise = !clockwise;
-            break;
-    }
-
-    if (slice == 0) visualClockwise = !visualClockwise;
-
-    return visualClockwise;
-}
-
-void rotateFromActiveFace(int key) {
-    if (!g_rubiksCube) return;
-
-    bool userClockwise = !g_counterClockwise;
-
-    auto rot = [&](Axis axis, int slice) {
-        bool adjusted = adjustClockwiseForView(axis, slice, userClockwise, g_activeFace);
-        g_rubiksCube->startRotation(axis, slice, adjusted);
+        Mat4 mat;
+        mat = translate(mat, currentPos);
+        float localFloat = std::sin(time * 3.0f + startPos.x) * 0.1f; 
+        mat = translate(mat, Vec3(0, localFloat, 0));
+        float rotSpeed = 2.0f + (time - t_startVortex > 0 ? (time - t_startVortex)*1.5f : 0);
+        mat = rotate(mat, time * rotSpeed, Vec3(0.5f, 1.0f, 0.2f)); 
+        mat = scale(mat, currentScale);
+        n->transform = mat;
     };
-
-    switch (g_activeFace) {
-        case ActiveFace::FRONT:
-            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
-            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
-            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
-            if (key == GLFW_KEY_L) rot(Axis::X, 0);
-            if (key == GLFW_KEY_V) rot(Axis::X, 1);
-            if (key == GLFW_KEY_R) rot(Axis::X, 2);
-            break;
-
-        case ActiveFace::BACK:
-            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
-            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
-            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
-            if (key == GLFW_KEY_L) rot(Axis::X, 2);
-            if (key == GLFW_KEY_V) rot(Axis::X, 1);
-            if (key == GLFW_KEY_R) rot(Axis::X, 0);
-            break;
-
-        case ActiveFace::LEFT:
-            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
-            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
-            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
-            if (key == GLFW_KEY_L) rot(Axis::Z, 0);
-            if (key == GLFW_KEY_V) rot(Axis::Z, 1);
-            if (key == GLFW_KEY_R) rot(Axis::Z, 2);
-            break;
-
-        case ActiveFace::RIGHT:
-            if (key == GLFW_KEY_U) rot(Axis::Y, 2);
-            if (key == GLFW_KEY_M) rot(Axis::Y, 1);
-            if (key == GLFW_KEY_D) rot(Axis::Y, 0);
-            if (key == GLFW_KEY_L) rot(Axis::Z, 2);
-            if (key == GLFW_KEY_V) rot(Axis::Z, 1);
-            if (key == GLFW_KEY_R) rot(Axis::Z, 0);
-            break;
-
-        case ActiveFace::UP:
-            if (key == GLFW_KEY_U) rot(Axis::Z, 0);
-            if (key == GLFW_KEY_M) rot(Axis::Z, 1);
-            if (key == GLFW_KEY_D) rot(Axis::Z, 2);
-            if (key == GLFW_KEY_L) rot(Axis::X, 0);
-            if (key == GLFW_KEY_V) rot(Axis::X, 1);
-            if (key == GLFW_KEY_R) rot(Axis::X, 2);
-            break;
-
-        case ActiveFace::DOWN:
-            if (key == GLFW_KEY_U) rot(Axis::Z, 2);
-            if (key == GLFW_KEY_M) rot(Axis::Z, 1);
-            if (key == GLFW_KEY_D) rot(Axis::Z, 0);
-            if (key == GLFW_KEY_L) rot(Axis::X, 0);
-            if (key == GLFW_KEY_V) rot(Axis::X, 1);
-            if (key == GLFW_KEY_R) rot(Axis::X, 2);
-            break;
-    }
 }
 
-std::vector<std::string> expandMove(const std::string& mov) {
-    std::vector<std::string> out;
-
-    if (mov.size() == 2 && mov[1] == '2') {
-        out.push_back(std::string(1, mov[0]));
-        out.push_back(std::string(1, mov[0]));   // ← dos veces
-    }
-    else {
-        out.push_back(mov);
-    }
-
-    return out;
-}
-
-void applyMoveAsKeyCallback(const std::string& mov) {
-
-    char m = mov[0];
-    bool prime = (mov.size() == 2 && mov[1] == '\'');
-
-    switch (m) {
-
-        case 'U':
-            g_activeFace = ActiveFace::FRONT;
-            g_counterClockwise = !prime;
-            rotateFromActiveFace(GLFW_KEY_U);
-            break;
-
-        case 'D':
-            g_activeFace = ActiveFace::FRONT;
-            g_counterClockwise = prime;
-            rotateFromActiveFace(GLFW_KEY_D);
-            break;
-
-        case 'L':
-            g_activeFace = ActiveFace::FRONT;
-            g_counterClockwise = !prime;
-            rotateFromActiveFace(GLFW_KEY_L);
-            break;
-
-        case 'R':
-            g_activeFace = ActiveFace::FRONT;
-            g_counterClockwise = prime;
-            rotateFromActiveFace(GLFW_KEY_R);
-            break;
-
-        case 'F':
-            g_activeFace = ActiveFace::UP;
-            g_counterClockwise = prime;
-            rotateFromActiveFace(GLFW_KEY_D);
-            break;
-
-        case 'B':
-            g_activeFace = ActiveFace::UP;
-            g_counterClockwise = !prime;
-            rotateFromActiveFace(GLFW_KEY_U);
-            break;
-    }
-}
-
-
-
-void processAnimationQueue() {
-
-    if (!g_rubiksCube) return;
-
-    // si está animando, NO avanzar
-    if (g_rubiksCube->m_animator.m_isAnimating)
-        return;
-
-    if (g_animationQueue.empty())
-        return;
-
-    // Leo el siguiente movimiento
-    std::string mov = g_animationQueue.front();
-    g_animationQueue.pop_front();
-
-    // Si es movimiento doble → R2, F2, U2...
-    if (mov.size() == 2 && mov[1] == '2') {
-
-        std::string m1(1, mov[0]);
-        std::string m2(1, mov[0]);
-
-        // Primero se ejecuta m1 (ahora)
-        // Y m2 se inserta al frente para que sea el siguiente
-        g_animationQueue.push_front(m2);
-
-        applyMoveAsKeyCallback(m1);
-        return;
-    }
-
-    // Movimiento simple
-    applyMoveAsKeyCallback(mov);
-}
-
-
-
-
-
-
-//--------------------CALLBACKS ------------------------------
-
-void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    if (g_rubiksCube == nullptr) return;
-
-    // --- Lógica de Cámara (Responde a PRESIONAR y REPETIR) ---
-    float cameraSpeed = 0.1f;
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        switch (key) {
-			
-			case GLFW_KEY_F: std::cout <<g_rubiksCube->getFaceletString()<< std::endl; break;
-			case GLFW_KEY_X: resolverCubo(g_rubiksCube); break;
-
-            case GLFW_KEY_W: g_cameraPos.z -= cameraSpeed; break;
-            case GLFW_KEY_S: g_cameraPos.z += cameraSpeed; break;
-            case GLFW_KEY_LEFT: g_cameraPos.x -= cameraSpeed; break;
-            case GLFW_KEY_RIGHT: g_cameraPos.x += cameraSpeed; break;
-            case GLFW_KEY_UP: g_cameraPos.y += cameraSpeed; break; // Arriba
-            case GLFW_KEY_DOWN: g_cameraPos.y -= cameraSpeed; break; // Abajo
-			
-			case GLFW_KEY_C:
-				g_counterClockwise = !g_counterClockwise;
-				std::cout << "Modo de rotacion cambiado a: "
-						  << (g_counterClockwise ? "CounterClockwise" : "Clockwise")
-						  << std::endl;
-				break;
-
-			// ---------------- SELECCIÓN DE CARA ACTIVA ----------------
-            case GLFW_KEY_1: g_activeFace = ActiveFace::FRONT; std::cout << "Cara activa: FRONT\n"; break;
-            case GLFW_KEY_2: g_activeFace = ActiveFace::BACK;  std::cout << "Cara activa: BACK\n"; break;
-            case GLFW_KEY_3: g_activeFace = ActiveFace::LEFT;  std::cout << "Cara activa: LEFT\n"; break;
-            case GLFW_KEY_4: g_activeFace = ActiveFace::RIGHT; std::cout << "Cara activa: RIGHT\n"; break;
-            case GLFW_KEY_5: g_activeFace = ActiveFace::UP;    std::cout << "Cara activa: UP\n"; break;
-            case GLFW_KEY_6: g_activeFace = ActiveFace::DOWN;  std::cout << "Cara activa: DOWN\n"; break;
-
-            // ---------------- ROTACIONES DEPENDIENDO DE LA CARA ACTIVA ----------------
-            case GLFW_KEY_U:
-            case GLFW_KEY_M:
-            case GLFW_KEY_D:
-            case GLFW_KEY_L:
-            case GLFW_KEY_V:
-            case GLFW_KEY_R:
-                rotateFromActiveFace(key);
-                break;
-
-        }
-    }
-
-    if (action == GLFW_PRESS && !keyProcessed[key]) {
-        keyProcessed[key] = true;
-        switch (key) {
-            case GLFW_KEY_ESCAPE: glfwSetWindowShouldClose(window, true); break;
-        }
-    }
-    if (action == GLFW_RELEASE) {
-        keyProcessed[key] = false;
-    }
-}
-
-
-// --- 8. FUNCIÓN MAIN ---
+// -----------------------------------------------------------------------------
+// MAIN
+// -----------------------------------------------------------------------------
 int main() {
-    glfwInit();
+    if (!glfwInit()) { return -1; }
+
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Esqueleto Cubo Rubik", NULL, NULL);
-    if (window == NULL) {
-        std::cout << "Failed to create GLFW window" << std::endl;
-        glfwTerminate();
-        return -1;
-    }
-    glfwMakeContextCurrent(window);
-    glfwSetKeyCallback(window, key_callback);
+    GLFWwindow* window = glfwCreateWindow(1024, 768, "Space Lighting: Rubiks Fleet", nullptr, nullptr);
+    if (!window) { glfwTerminate(); return -1; }
 
-    if (!gladLoadGL(glfwGetProcAddress)) {
-        std::cout << "Failed to initialize GLAD" << std::endl;
-        return -1;
-    }
+    glfwMakeContextCurrent(window);
+    if (!gladLoadGL((GLADloadfunc)glfwGetProcAddress)) { return -1; }
 
     glEnable(GL_DEPTH_TEST);
-    glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    Shader cubieShader(vertexShaderSource, fragmentShaderSource);
+    unsigned int shaderProgram = createShaderProgram();
+    
+    Mesh sphereMesh = createSphere(1.0f, 64, 48); 
+    
+    SceneNode rootNode; 
+    
+    // --- AGUJERO NEGRO ---
+    SceneNode* blackHole = new SceneNode(&sphereMesh);
+    blackHole->material.type = 1; 
 
-    RubiksCube rubiksCube;
-    rubiksCube.setupMesh();
-    g_rubiksCube = &rubiksCube;
+    blackHole->onUpdate = [](SceneNode* n, float dt, float time) {
+        float t_wakeUp = 6.0f;        
+        float t_implosionEnd = 6.5f;  
+        float t_phase2 = 12.0f;       
+        float t_phase3 = 18.0f;
+        float t_evaporationStart = 42.0f; 
+        float t_death = 45.0f;
 
-	double lastTime = glfwGetTime();
-	cubieShader.use();
-	cubieShader.setVec3("u_lightPos", Vec3(0.0f, 0.75f, 5.0f));  // posicion de luz
-	cubieShader.setVec3("u_lightColor", Vec3(1.0f, 1.0f, 1.0f)); // luz blanca
-	cubieShader.setFloat("u_ambientStrength", 0.4f);
-	cubieShader.setFloat("u_specularStrength", 10.1f);
+        if (time < t_wakeUp) {
+            float vibration = std::sin(time * 40.0f) * 0.02f; 
+            float scaleBase = 0.5f + vibration;
+            n->transform = scale(Mat4(), Vec3(scaleBase, scaleBase, scaleBase));
+            n->material.rimPower = 0.8f; 
+            n->material.rimColor = Vec3(0.8f, 0.9f, 1.0f); 
+        }
+        else if (time < t_implosionEnd) {
+            float t = (time - t_wakeUp) / (t_implosionEnd - t_wakeUp);
+            float scaleVal = lerp(0.5f, 0.05f, t);
+            n->transform = scale(Mat4(), Vec3(scaleVal, scaleVal, scaleVal));
+            n->material.rimPower = 0.1f; 
+            n->material.rimColor = Vec3(1.0f, 1.0f, 1.0f);
+        }
+        else if (time < t_phase2) {
+            float t = (time - t_implosionEnd) / (t_phase2 - t_implosionEnd);
+            float easeOut = 1.0f - (1.0f - t) * (1.0f - t);
+            float currentScale = lerp(0.1f, 3.5f, easeOut); 
+            n->transform = scale(Mat4(), Vec3(currentScale, currentScale, currentScale));
+            n->material.rimPower = lerp(1.0f, 3.0f, t); 
+            n->material.rimColor = lerp(Vec3(1.0f, 1.0f, 1.0f), Vec3(0.4f, 0.1f, 0.9f), t);
+        }
+        else if (time < t_phase3) {
+            float t = (time - t_phase2) / (t_phase3 - t_phase2);
+            float currentScale = lerp(3.5f, 5.0f, t);
+            float pulse = std::sin(time * 1.5f) * 0.1f; 
+            currentScale += pulse;
+            n->transform = scale(Mat4(), Vec3(currentScale, currentScale, currentScale));
+            n->material.rimPower = 3.5f;
+            n->material.rimColor = Vec3(0.3f, 0.05f, 0.8f);
+        }
+        else if (time < t_evaporationStart) {
+            float baseScale = 6.0f;
+            float pulse = std::sin(time * 0.8f) * 0.2f; 
+            float finalScale = baseScale + pulse;
+            n->transform = scale(Mat4(), Vec3(finalScale, finalScale, finalScale));
+            n->material.rimPower = 4.0f + (std::sin(time * 8.0f)*0.5f);
+            n->material.rimColor = Vec3(0.2f, 0.0f, 1.0f);
+        }
+        else if (time < t_death) {
+            float t = (time - t_evaporationStart) / (t_death - t_evaporationStart);
+            float currentScale = lerp(6.0f, 0.0f, t);
+            float deathVibration = std::sin(time * 100.0f) * (0.5f * t); 
+            currentScale += deathVibration;
+            n->transform = scale(Mat4(), Vec3(currentScale, currentScale, currentScale));
+            n->material.rimPower = lerp(4.0f, 0.1f, t); 
+            n->material.rimColor = lerp(Vec3(0.2f, 0.0f, 1.0f), Vec3(5.0f, 5.0f, 10.0f), t); 
+        } 
+        else {
+            n->transform = scale(Mat4(), Vec3(0,0,0));
+        }
+    };
+    rootNode.addChild(blackHole);
+
+    // --- RUBIKS CUBES ---
+    
+    // Helper actualizado con 'solveTime'
+    auto createRubiksNode = [&](float moveDelay, float solveTime, Vec3 pos, Vec3 color) {
+        SceneNode* node = new SceneNode(nullptr); 
+        node->rubiksCube = new RubiksCube();
+        node->rubiksCube->scramble(25, true); 
+        // Pasamos moveDelay para la trayectoria y solveTime para el inicio de la resolución
+        node->onUpdate = createTravelerBehavior(moveDelay, solveTime, pos, color);
+        rootNode.addChild(node);
+    };
+
+    // [GRUPO 1] 
+    createRubiksNode(8.0f, 6.0f, Vec3(20.0f, 5.0f, 0.0f), Vec3(0.0f, 1.0f, 1.0f));
+
+    // [GRUPO 2] - empieza 6s
+    createRubiksNode(11.0f, 9.0f, Vec3(-26.0f, -5.0f, 8.0f), Vec3(1.0f, 0.0f, 0.0f));
+    createRubiksNode(11.0f, 9.0f, Vec3(26.0f, 5.0f, -8.0f), Vec3(1.0f, 0.2f, 0.0f));
+
+    // [GRUPO 3] - empieza 9s
+    createRubiksNode(14.0f, 12.0f, Vec3(0.0f, 15.0f, 32.0f), Vec3(0.0f, 1.0f, 0.2f));
+    createRubiksNode(14.0f, 12.0f, Vec3(0.0f, -15.0f, -32.0f), Vec3(0.5f, 1.0f, 0.0f));
+    createRubiksNode(14.0f, 12.0f, Vec3(32.0f, 0.0f, 15.0f), Vec3(0.2f, 0.8f, 0.2f));
+    createRubiksNode(14.0f, 12.0f, Vec3(-32.0f, 0.0f, -15.0f), Vec3(0.8f, 1.0f, 0.0f));
+    createRubiksNode(14.0f, 12.0f, Vec3(20.0f, 20.0f, 20.0f), Vec3(0.4f, 1.0f, 0.4f));
+    
+    // [GRUPO 4] - empieza 12s
+    
+    createRubiksNode(17.0f, 15.0f, Vec3(38.0f, 10.0f, 38.0f), Vec3(1.0f, 0.0f, 1.0f));
+    createRubiksNode(17.0f, 15.0f, Vec3(-38.0f, -10.0f, -38.0f), Vec3(0.6f, 0.0f, 1.0f));
+
+
+    // CONFIGURACIÓN DE LUZ GLOBAL (Espacio)
+    Light light;
+    light.position = Vec3(20.0f, 20.0f, 20.0f); 
+    light.ambient = Vec3(0.05f, 0.05f, 0.08f); 
+    light.diffuse = Vec3(0.8f, 0.8f, 1.0f);
+    light.specular = Vec3(1.0f, 1.0f, 1.0f);
+
+    float startTime = (float)glfwGetTime();
+    float lastFrame = 0.0f;
 
     while (!glfwWindowShouldClose(window)) {
-		// --- Calculo de DeltaTime ---
-        double currentTime = glfwGetTime();
-        float deltaTime = (float)(currentTime - lastTime);
-        lastTime = currentTime;
-		
-        glClearColor(0.8f, 0.8f, 0.8f, 1.0f);
+        float currentFrame = (float)glfwGetTime();
+        float deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
+        float totalTime = currentFrame - startTime;
+
+        if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+            glfwSetWindowShouldClose(window, true);
+
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        Vec3 eye = g_cameraPos;
-        Vec3 center(g_cameraPos.x, g_cameraPos.y, g_cameraPos.z - 1.0f); 
-  
-        Vec3 up(0.0f, 1.0f, 0.0f);
+        glUseProgram(shaderProgram);
 
-        Mat4 view = lookAt(eye, center, up);
-        Mat4 proj = perspective(45.0f, (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-		
-		rubiksCube.update(deltaTime);
-		
-        cubieShader.use();       
-		cubieShader.setMat4("projection", proj.m);
-        cubieShader.setMat4("view", view.m);
+        rootNode.update(deltaTime, totalTime);
 
-		cubieShader.setVec3("u_viewPos", g_cameraPos);
-		processAnimationQueue();
+        Mat4 view = lookAt(Vec3(40, 30, 40), Vec3(0, 0, 0), Vec3(0, 1, 0));
+        Mat4 projection = perspective(toRadians(45.0f), 1024.0f / 768.0f, 0.1f, 300.0f);
 
-        rubiksCube.draw(cubieShader);
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, view.value_ptr());
+        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, projection.value_ptr());
+        glUniform3f(glGetUniformLocation(shaderProgram, "viewPos"), 40, 30, 40);
+
+        glUniform3f(glGetUniformLocation(shaderProgram, "light.position"), light.position.x, light.position.y, light.position.z);
+        glUniform3f(glGetUniformLocation(shaderProgram, "light.ambient"), light.ambient.x, light.ambient.y, light.ambient.z);
+        glUniform3f(glGetUniformLocation(shaderProgram, "light.diffuse"), light.diffuse.x, light.diffuse.y, light.diffuse.z);
+        glUniform3f(glGetUniformLocation(shaderProgram, "light.specular"), light.specular.x, light.specular.y, light.specular.z);
+
+        rootNode.draw(shaderProgram, Mat4(), view, projection);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
+    sphereMesh.cleanup();
+    delete blackHole;
+    
     glfwTerminate();
     return 0;
 }

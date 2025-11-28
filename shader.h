@@ -1,6 +1,12 @@
 #ifndef SHADER_H
 #define SHADER_H
 
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <iostream>
+#include "matLibrary.h"
+
 class Shader {
 public:
     unsigned int ID;
@@ -36,14 +42,15 @@ public:
         glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, mat);
     }
 
-    void setVec3Array(const std::string &name, int count, const Vec3 *values) const {
-        glUniform3fv(glGetUniformLocation(ID, name.c_str()), count, (const GLfloat*)values);
+    void setFloat(const std::string &name, float value) const { 
+        glUniform1f(glGetUniformLocation(ID, name.c_str()), value); 
     }
-	
-	void setFloat(const std::string &name, float value) const { 
-		glUniform1f(glGetUniformLocation(ID, name.c_str()), value); 
-	}
-	
+    
+    // Añadido para el agujero negro (Resolution)
+    void setVec2(const std::string &name, float x, float y) const {
+        glUniform2f(glGetUniformLocation(ID, name.c_str()), x, y);
+    }
+
     void setVec3(const std::string &name, const Vec3 &value) const {
         glUniform3f(glGetUniformLocation(ID, name.c_str()), value.x, value.y, value.z);
     }
@@ -73,4 +80,4 @@ private:
     }
 };
 
-#endif 
+#endif
